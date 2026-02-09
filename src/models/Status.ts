@@ -73,11 +73,10 @@ const statusSchema = new Schema<IStatus>(
 statusSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // Pre-save hook to set expiry
-statusSchema.pre('save', function (next) {
+statusSchema.pre('save', function () {
     if (!this.expiresAt) {
         this.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
     }
-    next();
 });
 
 export const Status: Model<IStatus> = mongoose.model<IStatus>('Status', statusSchema);
