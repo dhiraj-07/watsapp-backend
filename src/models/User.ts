@@ -3,9 +3,9 @@ import bcrypt from 'bcryptjs';
 
 export interface IUser extends Document {
     _id: mongoose.Types.ObjectId;
-    phone: string;
+    email: string;
+    phone?: string;
     name: string;
-    email?: string;
     bio?: string;
     avatar?: string;
     status: 'online' | 'offline' | 'away';
@@ -31,22 +31,24 @@ export interface IUser extends Document {
 
 const userSchema = new Schema<IUser>(
     {
-        phone: {
+        email: {
             type: String,
             required: true,
             unique: true,
             index: true,
+            trim: true,
+            lowercase: true,
+        },
+        phone: {
+            type: String,
+            sparse: true,
+            trim: true,
         },
         name: {
             type: String,
             required: true,
             trim: true,
             maxlength: 50,
-        },
-        email: {
-            type: String,
-            trim: true,
-            lowercase: true,
         },
         bio: {
             type: String,
@@ -126,7 +128,7 @@ const userSchema = new Schema<IUser>(
 );
 
 // Index for efficient querying
-userSchema.index({ name: 'text' });
+userSchema.index({ name: 'text', email: 'text' });
 
 // Pre-save hook for password hashing (if needed in future)
 userSchema.methods.comparePassword = async function (candidatePassword: string): Promise<boolean> {

@@ -1,7 +1,7 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
-import { User, Chat, Message, IMessage } from '../models';
+import { User, Chat, Message, IMessage, Call } from '../models';
 import mongoose from 'mongoose';
 import {
     sendNotification,
@@ -16,7 +16,7 @@ import {
 
 interface SocketUser {
     odId: string;
-    phone: string;
+    email: string;
 }
 
 interface AuthenticatedSocket extends Socket {
@@ -25,6 +25,9 @@ interface AuthenticatedSocket extends Socket {
 
 // Store online users
 const onlineUsers = new Map<string, Set<string>>(); // odId -> Set<socketId>
+
+// Track active calls: "callerId:recipientId" -> callId
+const activeCallsMap = new Map<string, string>();
 
 export const initializeSocket = (io: Server): void => {
     // Authentication middleware
@@ -36,8 +39,8 @@ export const initializeSocket = (io: Server): void => {
                 return next(new Error('Authentication required'));
             }
 
-            const decoded = jwt.verify(token as string, config.jwtSecret) as { userId: string; phone: string };
-            socket.user = { odId: decoded.userId, phone: decoded.phone };
+            const decoded = jwt.verify(token as string, config.jwtSecret) as { userId: string; email: string };
+            socket.user = { odId: decoded.userId, email: decoded.email };
             next();
         } catch {
             next(new Error('Invalid token'));
@@ -792,7 +795,7 @@ export const initializeSocket = (io: Server): void => {
                     } as any);
                 }
                 await chat.save();
-                await chat.populate('participants.user', 'name avatar status lastSeen phone bio');
+                await chat.populate('participants.user', 'name avatar status lastSeen email phone bio');
 
                 io.to(`chat:${data.chatId}`).emit('group:updated', {
                     chatId: data.chatId,
@@ -843,7 +846,7 @@ export const initializeSocket = (io: Server): void => {
                     p => p.user.toString() !== data.targetUserId
                 );
                 await chat.save();
-                await chat.populate('participants.user', 'name avatar status lastSeen phone bio');
+                await chat.populate('participants.user', 'name avatar status lastSeen email phone bio');
 
                 io.to(`chat:${data.chatId}`).emit('group:updated', {
                     chatId: data.chatId,
@@ -888,7 +891,7 @@ export const initializeSocket = (io: Server): void => {
 
                 target.role = 'admin';
                 await chat.save();
-                await chat.populate('participants.user', 'name avatar status lastSeen phone bio');
+                await chat.populate('participants.user', 'name avatar status lastSeen email phone bio');
 
                 io.to(`chat:${data.chatId}`).emit('group:updated', {
                     chatId: data.chatId,
@@ -926,7 +929,7 @@ export const initializeSocket = (io: Server): void => {
 
                 target.role = 'member';
                 await chat.save();
-                await chat.populate('participants.user', 'name avatar status lastSeen phone bio');
+                await chat.populate('participants.user', 'name avatar status lastSeen email phone bio');
 
                 io.to(`chat:${data.chatId}`).emit('group:updated', {
                     chatId: data.chatId,
@@ -967,7 +970,7 @@ export const initializeSocket = (io: Server): void => {
                 }
 
                 await chat.save();
-                await chat.populate('participants.user', 'name avatar status lastSeen phone bio');
+                await chat.populate('participants.user', 'name avatar status lastSeen email phone bio');
 
                 socket.leave(`chat:${data.chatId}`);
 
@@ -985,64 +988,195 @@ export const initializeSocket = (io: Server): void => {
 
         // ============ CALL EVENTS ============
 
-        socket.on('call:initiate', async (data: { recipientIds: string[]; type: 'audio' | 'video' }) => {
-            const caller = await User.findById(userId).select('name avatar');
-            const callerName = caller?.name || 'Someone';
+        socket.on('call:initiate', async (data: { recipientIds: string[]; type: 'audio' | 'video'; chatId?: string }, callback?: (res: { callId?: string; error?: string }) => void) => {
+            try {
+                const caller = await User.findById(userId).select('name avatar');
+                const callerName = caller?.name || 'Someone';
 
-            data.recipientIds.forEach(recipientId => {
-                const recipientSockets = onlineUsers.get(recipientId);
-                if (recipientSockets) {
-                    recipientSockets.forEach(socketId => {
-                        io.to(socketId).emit('call:incoming', {
-                            callerId: userId,
-                            caller,
-                            type: data.type,
+                // Find or determine chat for this call
+                let chatId = data.chatId;
+                if (!chatId && data.recipientIds.length === 1) {
+                    const chat = await Chat.findOne({
+                        type: 'private',
+                        'participants.user': { $all: [userId, data.recipientIds[0]] },
+                    }).select('_id');
+                    chatId = chat?._id?.toString();
+                }
+
+                // Create Call document
+                const call = await Call.create({
+                    type: data.type,
+                    initiator: userId,
+                    participants: data.recipientIds.map(id => ({ user: id, status: 'pending' })),
+                    status: 'ringing',
+                    chat: chatId || undefined,
+                });
+
+                const callId = call._id.toString();
+
+                data.recipientIds.forEach(recipientId => {
+                    activeCallsMap.set(`${userId}:${recipientId}`, callId);
+
+                    const recipientSockets = onlineUsers.get(recipientId);
+                    if (recipientSockets) {
+                        recipientSockets.forEach(socketId => {
+                            io.to(socketId).emit('call:incoming', {
+                                callerId: userId,
+                                caller,
+                                type: data.type,
+                                callId,
+                                chatId,
+                            });
                         });
-                    });
-                }
+                    }
 
-                // FCM push for incoming call (high priority — works when app killed)
-                const notif = buildIncomingCallNotification(callerName, data.type, userId);
-                sendNotification(recipientId, notif).catch(err =>
-                    console.error('FCM call notification error:', err)
-                );
-            });
-        });
-
-        socket.on('call:accept', (data: { callerId: string }) => {
-            const callerSockets = onlineUsers.get(data.callerId);
-            if (callerSockets) {
-                callerSockets.forEach(socketId => {
-                    io.to(socketId).emit('call:accepted', { userId });
+                    // FCM push
+                    const notif = buildIncomingCallNotification(callerName, data.type, userId);
+                    sendNotification(recipientId, notif).catch(err =>
+                        console.error('FCM call notification error:', err)
+                    );
                 });
+
+                callback?.({ callId });
+            } catch (error) {
+                console.error('Call initiate error:', error);
+                callback?.({ error: 'Failed to initiate call' });
             }
         });
 
-        socket.on('call:reject', (data: { callerId: string }) => {
-            const callerSockets = onlineUsers.get(data.callerId);
-            if (callerSockets) {
-                callerSockets.forEach(socketId => {
-                    io.to(socketId).emit('call:rejected', { userId });
-                });
-            }
-
-            // Send missed call notification to the rejector (if offline later) and caller
-            User.findById(userId).select('name').lean().then(rejecter => {
-                const rejecterName = rejecter?.name || 'Someone';
-                const notif = buildMissedCallNotification(rejecterName, 'audio', userId);
-                sendNotification(data.callerId, notif).catch(() => { });
-            });
-        });
-
-        socket.on('call:end', (data: { recipientIds: string[] }) => {
-            data.recipientIds.forEach(recipientId => {
-                const recipientSockets = onlineUsers.get(recipientId);
-                if (recipientSockets) {
-                    recipientSockets.forEach(socketId => {
-                        io.to(socketId).emit('call:ended', { userId });
+        socket.on('call:accept', async (data: { callerId: string; callId?: string }) => {
+            try {
+                const callerSockets = onlineUsers.get(data.callerId);
+                if (callerSockets) {
+                    callerSockets.forEach(socketId => {
+                        io.to(socketId).emit('call:accepted', { userId });
                     });
                 }
-            });
+
+                // Update Call document
+                const callId = data.callId || activeCallsMap.get(`${data.callerId}:${userId}`);
+                if (callId) {
+                    await Call.findByIdAndUpdate(callId, {
+                        $set: {
+                            status: 'ongoing',
+                            startedAt: new Date(),
+                            'participants.$[elem].status': 'accepted',
+                            'participants.$[elem].joinedAt': new Date(),
+                        },
+                    }, { arrayFilters: [{ 'elem.user': new mongoose.Types.ObjectId(userId) }] });
+                }
+            } catch (error) {
+                console.error('Call accept error:', error);
+            }
+        });
+
+        socket.on('call:reject', async (data: { callerId: string; callId?: string }) => {
+            try {
+                const callerSockets = onlineUsers.get(data.callerId);
+                if (callerSockets) {
+                    callerSockets.forEach(socketId => {
+                        io.to(socketId).emit('call:rejected', { userId });
+                    });
+                }
+
+                // Update Call to ended + create declined call message in chat
+                const callId = data.callId || activeCallsMap.get(`${data.callerId}:${userId}`);
+                if (callId) {
+                    const call = await Call.findByIdAndUpdate(callId, {
+                        $set: {
+                            status: 'ended',
+                            endedAt: new Date(),
+                            'participants.$[elem].status': 'rejected',
+                        },
+                    }, { arrayFilters: [{ 'elem.user': new mongoose.Types.ObjectId(userId) }], new: true });
+
+                    // Create declined call message in chat
+                    if (call?.chat) {
+                        const callMsg = await Message.create({
+                            chat: call.chat,
+                            sender: data.callerId,
+                            content: JSON.stringify({ callType: call.type, status: 'declined', callId }),
+                            messageType: 'call',
+                        });
+                        await callMsg.populate('sender', 'name avatar email phone');
+                        await Chat.findByIdAndUpdate(call.chat, { lastMessage: callMsg._id, lastMessageAt: new Date() });
+                        io.to(`chat:${call.chat.toString()}`).emit('message:new', { message: callMsg.toObject(), chatId: call.chat.toString() });
+                    }
+
+                    activeCallsMap.delete(`${data.callerId}:${userId}`);
+                }
+
+                // Missed call notification
+                User.findById(userId).select('name').lean().then(rejecter => {
+                    const rejecterName = rejecter?.name || 'Someone';
+                    const notif = buildMissedCallNotification(rejecterName, 'audio', userId);
+                    sendNotification(data.callerId, notif).catch(() => { });
+                });
+            } catch (error) {
+                console.error('Call reject error:', error);
+            }
+        });
+
+        socket.on('call:end', async (data: { recipientIds: string[]; callId?: string }) => {
+            try {
+                data.recipientIds.forEach(recipientId => {
+                    const recipientSockets = onlineUsers.get(recipientId);
+                    if (recipientSockets) {
+                        recipientSockets.forEach(socketId => {
+                            io.to(socketId).emit('call:ended', { userId });
+                        });
+                    }
+                });
+
+                // Update Call document + create call message
+                let callId = data.callId;
+                if (!callId && data.recipientIds.length > 0) {
+                    callId = activeCallsMap.get(`${userId}:${data.recipientIds[0]}`)
+                        || activeCallsMap.get(`${data.recipientIds[0]}:${userId}`);
+                }
+
+                if (callId) {
+                    const call = await Call.findById(callId);
+                    if (call) {
+                        const wasConnected = call.status === 'ongoing';
+                        call.status = 'ended';
+                        call.endedAt = new Date();
+                        if (call.startedAt) {
+                            call.duration = Math.floor((call.endedAt.getTime() - call.startedAt.getTime()) / 1000);
+                        }
+                        const participant = call.participants.find(p => p.user.toString() === userId);
+                        if (participant) participant.leftAt = new Date();
+                        await call.save();
+
+                        // Create call message in chat
+                        if (call.chat) {
+                            const status = wasConnected ? 'ended' : 'missed';
+                            const callMsg = await Message.create({
+                                chat: call.chat,
+                                sender: call.initiator,
+                                content: JSON.stringify({
+                                    callType: call.type,
+                                    status,
+                                    duration: call.duration || 0,
+                                    callId,
+                                }),
+                                messageType: 'call',
+                            });
+                            await callMsg.populate('sender', 'name avatar email phone');
+                            await Chat.findByIdAndUpdate(call.chat, { lastMessage: callMsg._id, lastMessageAt: new Date() });
+                            io.to(`chat:${call.chat.toString()}`).emit('message:new', { message: callMsg.toObject(), chatId: call.chat.toString() });
+                        }
+                    }
+
+                    // Clean up active calls map
+                    data.recipientIds.forEach(rid => {
+                        activeCallsMap.delete(`${userId}:${rid}`);
+                        activeCallsMap.delete(`${rid}:${userId}`);
+                    });
+                }
+            } catch (error) {
+                console.error('Call end error:', error);
+            }
         });
 
         // WebRTC signaling

@@ -7,25 +7,25 @@ export const authController = {
     // Request OTP for login/signup
     async requestOTP(req: AuthRequest, res: Response): Promise<void> {
         try {
-            const { phone } = req.body;
+            const { email } = req.body;
 
-            if (!phone) {
-                res.status(400).json({ error: 'Phone number is required' });
+            if (!email) {
+                res.status(400).json({ error: 'Email is required' });
                 return;
             }
 
-            // Validate phone format (basic validation)
-            const phoneRegex = /^\+?[1-9]\d{9,14}$/;
-            if (!phoneRegex.test(phone.replace(/\s/g, ''))) {
-                res.status(400).json({ error: 'Invalid phone number format' });
+            // Validate email format
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                res.status(400).json({ error: 'Invalid email format' });
                 return;
             }
 
-            const result = await sendOTP(phone);
+            const result = await sendOTP(email);
 
             if (result.success) {
                 // Check if user exists
-                const existingUser = await User.findOne({ phone });
+                const existingUser = await User.findOne({ email });
                 res.json({
                     message: result.message,
                     isNewUser: !existingUser,
@@ -44,14 +44,14 @@ export const authController = {
     // Verify OTP and login/register
     async verifyOTPAndLogin(req: AuthRequest, res: Response): Promise<void> {
         try {
-            const { phone, otp, name } = req.body;
+            const { email, otp, name } = req.body;
 
-            if (!phone || !otp) {
-                res.status(400).json({ error: 'Phone and OTP are required' });
+            if (!email || !otp) {
+                res.status(400).json({ error: 'Email and OTP are required' });
                 return;
             }
 
-            const verification = verifyOTP(phone, otp);
+            const verification = verifyOTP(email, otp);
 
             if (!verification.valid) {
                 res.status(400).json({ error: verification.message });
@@ -59,7 +59,7 @@ export const authController = {
             }
 
             // Check if user exists
-            let user = await User.findOne({ phone });
+            let user = await User.findOne({ email });
             let isNewUser = false;
 
             if (!user) {
@@ -70,7 +70,7 @@ export const authController = {
                 }
 
                 user = new User({
-                    phone,
+                    email,
                     name,
                     isVerified: true,
                     status: 'online',
@@ -84,13 +84,14 @@ export const authController = {
                 await user.save();
             }
 
-            const token = generateToken(user._id.toString(), user.phone);
+            const token = generateToken(user._id.toString(), user.email);
             const refreshToken = generateRefreshToken(user._id.toString());
 
             res.json({
                 message: isNewUser ? 'Account created successfully' : 'Login successful',
                 user: {
                     _id: user._id,
+                    email: user.email,
                     phone: user.phone,
                     name: user.name,
                     bio: user.bio,
@@ -207,7 +208,7 @@ export const authController = {
                 return;
             }
 
-            const user = await User.findById(req.userId).populate('contacts', 'name avatar status phone bio lastSeen');
+            const user = await User.findById(req.userId).populate('contacts', 'name avatar status email phone bio lastSeen');
             res.json({ contacts: user?.contacts || [] });
         } catch (error) {
             console.error('Get contacts error:', error);
@@ -215,7 +216,7 @@ export const authController = {
         }
     },
 
-    // Add a contact by phone number or user ID
+    // Add a contact by email or user ID
     async addContact(req: AuthRequest, res: Response): Promise<void> {
         try {
             if (!req.user) {
@@ -223,10 +224,10 @@ export const authController = {
                 return;
             }
 
-            const { phone, userId: contactUserId } = req.body;
+            const { email, userId: contactUserId } = req.body;
 
-            if (!phone && !contactUserId) {
-                res.status(400).json({ error: 'Phone number or user ID is required' });
+            if (!email && !contactUserId) {
+                res.status(400).json({ error: 'Email or user ID is required' });
                 return;
             }
 
@@ -235,7 +236,7 @@ export const authController = {
             if (contactUserId) {
                 contactUser = await User.findById(contactUserId);
             } else {
-                contactUser = await User.findOne({ phone: phone.replace(/\s/g, '') });
+                contactUser = await User.findOne({ email: email.trim().toLowerCase() });
             }
 
             if (!contactUser) {
@@ -263,13 +264,14 @@ export const authController = {
                 $addToSet: { contacts: req.userId },
             });
 
-            const updatedUser = await User.findById(req.userId).populate('contacts', 'name avatar status phone bio lastSeen');
+            const updatedUser = await User.findById(req.userId).populate('contacts', 'name avatar status email phone bio lastSeen');
 
             res.json({
                 message: `${contactUser.name} added to contacts`,
                 contact: {
                     _id: contactUser._id,
                     name: contactUser.name,
+                    email: contactUser.email,
                     phone: contactUser.phone,
                     avatar: contactUser.avatar,
                     status: contactUser.status,
@@ -316,7 +318,7 @@ export const authController = {
                 return;
             }
 
-            const user = await User.findById(req.userId).populate('blockedUsers', 'name avatar phone status bio lastSeen');
+            const user = await User.findById(req.userId).populate('blockedUsers', 'name avatar email phone status bio lastSeen');
             res.json({ blockedUsers: user?.blockedUsers || [] });
         } catch (error) {
             console.error('Get blocked users error:', error);

@@ -11,7 +11,8 @@ export type MessageType =
     | 'gif'
     | 'poll'
     | 'contact'
-    | 'system';
+    | 'system'
+    | 'call';
 
 export interface IReaction {
     user: mongoose.Types.ObjectId;
@@ -87,7 +88,7 @@ const messageSchema = new Schema<IMessage>(
         },
         messageType: {
             type: String,
-            enum: ['text', 'image', 'video', 'audio', 'document', 'location', 'sticker', 'gif', 'poll', 'contact', 'system'],
+            enum: ['text', 'image', 'video', 'audio', 'document', 'location', 'sticker', 'gif', 'poll', 'contact', 'system', 'call'],
             default: 'text',
         },
         media: {

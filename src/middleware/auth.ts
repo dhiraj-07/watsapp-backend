@@ -10,14 +10,14 @@ export interface AuthRequest extends Request {
 
 interface JwtPayload {
     userId: string;
-    phone: string;
+    email: string;
     iat: number;
     exp: number;
 }
 
-export const generateToken = (userId: string, phone: string): string => {
+export const generateToken = (userId: string, email: string): string => {
     return jwt.sign(
-        { userId, phone },
+        { userId, email },
         config.jwtSecret,
         { expiresIn: config.jwtExpiresIn }
     );

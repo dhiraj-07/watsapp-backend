@@ -64,7 +64,7 @@ export const statusController = {
                 user: { $in: contactIds, $nin: blockedIds },
                 expiresAt: { $gt: now },
             })
-                .populate('user', 'name avatar phone')
+                .populate('user', 'name avatar email phone')
                 .sort({ createdAt: -1 });
 
             // Get own statuses
@@ -72,7 +72,7 @@ export const statusController = {
                 user: userId,
                 expiresAt: { $gt: now },
             })
-                .populate('user', 'name avatar phone')
+                .populate('user', 'name avatar email phone')
                 .sort({ createdAt: -1 });
 
             // Group by user

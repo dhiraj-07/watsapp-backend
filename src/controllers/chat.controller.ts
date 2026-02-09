@@ -57,7 +57,7 @@ export const chatController = {
                 'participants.user': userId,
                 archivedBy: { $ne: userId },
             })
-                .populate('participants.user', 'name avatar status lastSeen phone bio settings')
+                .populate('participants.user', 'name avatar status lastSeen email phone bio settings')
                 .populate('lastMessage')
                 .populate('createdBy', 'name avatar')
                 .sort({ lastMessageAt: -1 });
@@ -122,7 +122,7 @@ export const chatController = {
             let chat = await Chat.findOne({
                 type: 'private',
                 'participants.user': { $all: [userId, recipientId] },
-            }).populate('participants.user', 'name avatar status lastSeen phone');
+            }).populate('participants.user', 'name avatar status lastSeen email phone');
 
             if (!chat) {
                 // Create new chat
@@ -135,7 +135,7 @@ export const chatController = {
                     createdBy: userId,
                 });
                 await chat.save();
-                await chat.populate('participants.user', 'name avatar status lastSeen phone');
+                await chat.populate('participants.user', 'name avatar status lastSeen email phone');
             }
 
             res.json({ chat });
@@ -172,7 +172,7 @@ export const chatController = {
             });
 
             await chat.save();
-            await chat.populate('participants.user', 'name avatar status lastSeen phone');
+            await chat.populate('participants.user', 'name avatar status lastSeen email phone');
 
             res.json({ chat, message: 'Group created successfully' });
         } catch (error) {
@@ -246,7 +246,7 @@ export const chatController = {
 
             chat.participants.push(...newParticipants);
             await chat.save();
-            await chat.populate('participants.user', 'name avatar status lastSeen phone');
+            await chat.populate('participants.user', 'name avatar status lastSeen email phone');
 
             res.json({ chat, message: 'Participants added' });
         } catch (error) {
@@ -447,7 +447,7 @@ export const chatController = {
                 },
                 { $set: { name, description, avatar } },
                 { new: true }
-            ).populate('participants.user', 'name avatar status lastSeen phone');
+            ).populate('participants.user', 'name avatar status lastSeen email phone');
 
             if (!chat) {
                 res.status(403).json({ error: 'Not authorized or chat not found' });
@@ -476,10 +476,10 @@ export const chatController = {
                 _id: { $ne: userId },
                 $or: [
                     { name: { $regex: q, $options: 'i' } },
-                    { phone: { $regex: q, $options: 'i' } },
+                    { email: { $regex: q, $options: 'i' } },
                 ],
             })
-                .select('name avatar status phone bio')
+                .select('name avatar status email phone bio')
                 .limit(20);
 
             res.json({ users });

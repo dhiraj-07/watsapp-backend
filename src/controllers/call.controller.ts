@@ -171,8 +171,8 @@ export const callController = {
             }
 
             const calls = await Call.find(query)
-                .populate('initiator', 'name avatar phone')
-                .populate('participants.user', 'name avatar phone')
+                .populate('initiator', 'name avatar email phone')
+                .populate('participants.user', 'name avatar email phone')
                 .sort({ createdAt: -1 })
                 .limit(parseInt(limit as string));
 
