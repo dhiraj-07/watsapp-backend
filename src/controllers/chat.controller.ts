@@ -489,6 +489,73 @@ export const chatController = {
         }
     },
 
+    // Toggle mute for a chat
+    async muteChat(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const { muted } = req.body;
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
+
+            await Chat.updateOne(
+                { _id: chatId, 'participants.user': userId },
+                { $set: { 'participants.$.muted': !!muted } }
+            );
+            res.json({ message: muted ? 'Chat muted' : 'Chat unmuted', muted: !!muted });
+        } catch (error) {
+            console.error('Mute chat error:', error);
+            res.status(500).json({ error: 'Failed to update mute setting' });
+        }
+    },
+
+    // Clear a single chat (soft-delete messages for current user)
+    async clearChat(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
+
+            await Message.updateMany(
+                { chat: chatId },
+                { $addToSet: { deletedFor: userId } }
+            );
+            await Chat.updateOne({ _id: chatId }, { $unset: { lastMessage: 1 } });
+            res.json({ message: 'Chat cleared' });
+        } catch (error) {
+            console.error('Clear chat error:', error);
+            res.status(500).json({ error: 'Failed to clear chat' });
+        }
+    },
+
+    // Delete a single chat for current user
+    async deleteChat(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
+
+            // Soft-delete all messages for this user
+            await Message.updateMany(
+                { chat: chatId },
+                { $addToSet: { deletedFor: userId } }
+            );
+
+            // Remove user from participants
+            await Chat.updateOne(
+                { _id: chatId },
+                { $pull: { participants: { user: userId } } as any, $unset: { lastMessage: 1 } }
+            );
+
+            res.json({ message: 'Chat deleted' });
+        } catch (error) {
+            console.error('Delete chat error:', error);
+            res.status(500).json({ error: 'Failed to delete chat' });
+        }
+    },
+
     // Archive all chats
     async archiveAll(req: AuthRequest, res: Response): Promise<void> {
         try {

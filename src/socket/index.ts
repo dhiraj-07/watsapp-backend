@@ -164,6 +164,21 @@ export const initializeSocket = (io: Server): void => {
                     return;
                 }
 
+                // Auto-join all online participants to the chat room
+                // (handles newly created chats where recipients haven't joined yet)
+                for (const p of chat.participants) {
+                    const pid = p.user.toString();
+                    const pSocketIds = onlineUsers.get(pid);
+                    if (pSocketIds) {
+                        for (const sid of pSocketIds) {
+                            const s = io.sockets.sockets.get(sid);
+                            if (s && !s.rooms.has(`chat:${chatId}`)) {
+                                s.join(`chat:${chatId}`);
+                            }
+                        }
+                    }
+                }
+
                 // Create message
                 const message = new Message({
                     chat: chatId,
@@ -285,6 +300,20 @@ export const initializeSocket = (io: Server): void => {
                         'participants.user': userId,
                     });
                     if (!targetChat) continue;
+
+                    // Auto-join all online participants to the target chat room
+                    for (const p of targetChat.participants) {
+                        const pid = p.user.toString();
+                        const pSocketIds = onlineUsers.get(pid);
+                        if (pSocketIds) {
+                            for (const sid of pSocketIds) {
+                                const s = io.sockets.sockets.get(sid);
+                                if (s && !s.rooms.has(`chat:${targetChatId}`)) {
+                                    s.join(`chat:${targetChatId}`);
+                                }
+                            }
+                        }
+                    }
 
                     for (const orig of originalMessages) {
                         const newMsg = new Message({

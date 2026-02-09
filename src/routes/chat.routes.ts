@@ -20,6 +20,9 @@ router.post('/:chatId/participants/:userId/make-admin', chatController.makeAdmin
 router.post('/:chatId/participants/:userId/remove-admin', chatController.removeAdmin);
 router.delete('/:chatId/leave', chatController.leaveGroup);
 router.put('/:chatId', chatController.updateGroup);
+router.post('/:chatId/mute', chatController.muteChat);
+router.post('/:chatId/clear', chatController.clearChat);
+router.delete('/:chatId', chatController.deleteChat);
 
 // User search
 router.get('/users/search', chatController.searchUsers);
