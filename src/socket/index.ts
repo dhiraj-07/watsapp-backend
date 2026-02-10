@@ -372,11 +372,16 @@ export const initializeSocket = (io: Server): void => {
             }
         });
 
-        // Message delivered
+        // Message delivered — only mark messages from OTHER senders as delivered
         socket.on('message:delivered', async (data: { messageId: string; chatId?: string }) => {
             try {
-                const message = await Message.findByIdAndUpdate(
-                    data.messageId,
+                // Prevent sender from marking their own message as delivered
+                const message = await Message.findOneAndUpdate(
+                    {
+                        _id: data.messageId,
+                        sender: { $ne: userId },
+                        'deliveredTo.user': { $ne: userId },
+                    },
                     {
                         $addToSet: {
                             deliveredTo: { user: userId, deliveredAt: new Date() },
@@ -389,7 +394,7 @@ export const initializeSocket = (io: Server): void => {
                     io.to(`chat:${message.chat}`).emit('message:deliveryUpdate', {
                         chatId: message.chat.toString(),
                         messageIds: [data.messageId],
-                        deliveredTo: message.deliveredTo,
+                        deliveredTo: [{ user: userId, deliveredAt: new Date() }],
                     });
                 }
             } catch (error) {
@@ -397,29 +402,67 @@ export const initializeSocket = (io: Server): void => {
             }
         });
 
-        // Message read
+        // Message read — WhatsApp-like read receipt logic:
+        // 1. Only mark messages from OTHER senders as read (never your own).
+        // 2. Only emit readUpdate for messages that were actually eligible.
+        // 3. Respect the reader's readReceipts privacy setting.
+        // 4. Reading implies delivery, so also mark as delivered if not already.
         socket.on('message:read', async (data: { chatId: string; messageIds: string[] }) => {
             try {
                 const { chatId, messageIds } = data;
+                if (!messageIds || messageIds.length === 0) return;
 
+                // Find messages that can actually be marked as read:
+                // - In the specified chat
+                // - NOT sent by the current user (can't "read" your own messages)
+                // - NOT already read by the current user
+                const eligibleMessages = await Message.find({
+                    _id: { $in: messageIds },
+                    chat: chatId,
+                    sender: { $ne: userId },
+                    'readBy.user': { $ne: userId },
+                    isDeleted: false,
+                }).select('_id');
+
+                if (eligibleMessages.length === 0) return;
+
+                const eligibleIds = eligibleMessages.map(m => m._id);
+                const now = new Date();
+
+                // Update DB — mark eligible messages as read
                 await Message.updateMany(
-                    {
-                        _id: { $in: messageIds },
-                        chat: chatId,
-                        sender: { $ne: userId },
-                    },
+                    { _id: { $in: eligibleIds } },
                     {
                         $addToSet: {
-                            readBy: { user: userId, readAt: new Date() },
+                            readBy: { user: userId, readAt: now },
                         },
                     }
                 );
 
-                io.to(`chat:${chatId}`).emit('message:readUpdate', {
-                    chatId,
-                    messageIds,
-                    readBy: { user: userId, readAt: new Date() },
-                });
+                // Read implies delivered — also mark as delivered if not already
+                await Message.updateMany(
+                    {
+                        _id: { $in: eligibleIds },
+                        'deliveredTo.user': { $ne: userId },
+                    },
+                    {
+                        $addToSet: {
+                            deliveredTo: { user: userId, deliveredAt: now },
+                        },
+                    }
+                );
+
+                // Check reader's readReceipts privacy setting before broadcasting
+                const reader = await User.findById(userId).select('settings').lean();
+                const readReceiptsEnabled = reader?.settings?.readReceipts !== false;
+
+                if (readReceiptsEnabled) {
+                    io.to(`chat:${chatId}`).emit('message:readUpdate', {
+                        chatId,
+                        messageIds: eligibleIds.map(id => id.toString()),
+                        readBy: { user: userId, readAt: now },
+                    });
+                }
             } catch (error) {
                 console.error('Read update error:', error);
             }
