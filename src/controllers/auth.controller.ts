@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { User, Chat, Message, Block, makeBlockId } from '../models';
-import { AuthRequest, generateToken, generateRefreshToken } from '../middleware/auth';
+import { AuthRequest, generateToken, generateRefreshToken, verifyRefreshToken } from '../middleware/auth';
 import { sendOTP, verifyOTP } from '../services/otp.service';
 import { getSocketIO } from '../socket';
 
@@ -70,14 +70,30 @@ export const authController = {
                     return;
                 }
 
-                user = new User({
-                    email,
-                    name,
-                    isVerified: true,
-                    status: 'online',
-                });
-                await user.save();
-                isNewUser = true;
+                try {
+                    user = new User({
+                        email,
+                        name,
+                        isVerified: true,
+                        status: 'online',
+                    });
+                    await user.save();
+                    isNewUser = true;
+                } catch (saveError: unknown) {
+                    // Handle duplicate key error (race condition)
+                    if (saveError && typeof saveError === 'object' && 'code' in saveError && (saveError as { code: number }).code === 11000) {
+                        user = await User.findOne({ email });
+                        if (!user) {
+                            res.status(500).json({ error: 'Account creation failed. Please try again.' });
+                            return;
+                        }
+                        user.status = 'online';
+                        user.isVerified = true;
+                        await user.save();
+                    } else {
+                        throw saveError;
+                    }
+                }
             } else {
                 // Update user status
                 user.status = 'online';
@@ -169,6 +185,50 @@ export const authController = {
         } catch (error) {
             console.error('Logout error:', error);
             res.status(500).json({ error: 'Logout failed' });
+        }
+    },
+
+    // Refresh access token using refresh token
+    async refreshToken(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const { refreshToken: rToken } = req.body;
+
+            if (!rToken) {
+                res.status(400).json({ error: 'Refresh token is required' });
+                return;
+            }
+
+            const decoded = verifyRefreshToken(rToken);
+            if (!decoded) {
+                res.status(401).json({ error: 'Invalid or expired refresh token' });
+                return;
+            }
+
+            const user = await User.findById(decoded.userId);
+            if (!user) {
+                res.status(401).json({ error: 'User not found' });
+                return;
+            }
+
+            const newToken = generateToken(user._id.toString(), user.email);
+            const newRefreshToken = generateRefreshToken(user._id.toString());
+
+            res.json({
+                token: newToken,
+                refreshToken: newRefreshToken,
+                user: {
+                    _id: user._id,
+                    email: user.email,
+                    phone: user.phone,
+                    name: user.name,
+                    bio: user.bio,
+                    avatar: user.avatar,
+                    status: user.status,
+                },
+            });
+        } catch (error) {
+            console.error('Refresh token error:', error);
+            res.status(500).json({ error: 'Token refresh failed' });
         }
     },
 

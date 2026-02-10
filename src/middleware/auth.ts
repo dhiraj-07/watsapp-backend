@@ -39,6 +39,14 @@ export const verifyToken = (token: string): JwtPayload | null => {
     }
 };
 
+export const verifyRefreshToken = (token: string): { userId: string } | null => {
+    try {
+        return jwt.verify(token, config.jwtRefreshSecret) as { userId: string };
+    } catch {
+        return null;
+    }
+};
+
 export const authMiddleware = async (
     req: AuthRequest,
     res: Response,
