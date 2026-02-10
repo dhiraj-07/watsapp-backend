@@ -9,6 +9,7 @@ router.use(authMiddleware);
 
 // Chat routes
 router.get('/', chatController.getChats);
+router.get('/muted', chatController.getMutedChats);
 router.post('/private', chatController.getOrCreatePrivateChat);
 router.post('/group', chatController.createGroup);
 

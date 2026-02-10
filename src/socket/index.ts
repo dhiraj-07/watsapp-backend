@@ -962,6 +962,55 @@ export const initializeSocket = (io: Server): void => {
             }
         });
 
+        // Mute/unmute a chat (real-time sync across devices)
+        socket.on('chat:mute', async (data: { chatId: string; muted: boolean; duration?: string }, callback) => {
+            try {
+                const { chatId, muted, duration } = data;
+                const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+                if (!chat) { callback?.({ error: 'Chat not found' }); return; }
+
+                let mutedUntil: Date | null = null;
+                if (muted && duration && duration !== 'always') {
+                    const now = new Date();
+                    const durations: Record<string, number> = {
+                        '8h': 8 * 60 * 60 * 1000,
+                        '1w': 7 * 24 * 60 * 60 * 1000,
+                        '1y': 365 * 24 * 60 * 60 * 1000,
+                    };
+                    const ms = durations[duration];
+                    if (ms) mutedUntil = new Date(now.getTime() + ms);
+                }
+
+                const updateFields: Record<string, unknown> = {
+                    'participants.$.muted': !!muted,
+                    'participants.$.mutedUntil': muted ? mutedUntil : null,
+                };
+
+                await Chat.updateOne(
+                    { _id: chatId, 'participants.user': userId },
+                    { $set: updateFields }
+                );
+
+                // Emit to all of this user's sockets (cross-device sync)
+                const userSocketIds = onlineUsers.get(userId);
+                if (userSocketIds) {
+                    userSocketIds.forEach(sid => {
+                        io.to(sid).emit('chat:muteUpdated', {
+                            chatId,
+                            muted: !!muted,
+                            mutedUntil,
+                            duration: muted ? (duration || 'always') : null,
+                        });
+                    });
+                }
+
+                callback?.({ success: true, muted: !!muted, mutedUntil });
+            } catch (error) {
+                console.error('Mute chat error:', error);
+                callback?.({ error: 'Failed to mute chat' });
+            }
+        });
+
         // ============ GROUP ADMIN EVENTS ============
 
         // Add members to group (admin only)

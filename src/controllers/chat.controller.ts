@@ -529,23 +529,82 @@ export const chatController = {
         }
     },
 
-    // Toggle mute for a chat
+    // Toggle mute for a chat (with optional duration like WhatsApp)
     async muteChat(req: AuthRequest, res: Response): Promise<void> {
         try {
             const userId = req.userId;
             const { chatId } = req.params;
-            const { muted } = req.body;
+            const { muted, duration } = req.body; // duration: '8h' | '1w' | '1y' | 'always' | null
             const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
             if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
 
+            let mutedUntil: Date | null = null;
+            if (muted && duration && duration !== 'always') {
+                const now = new Date();
+                const durations: Record<string, number> = {
+                    '8h': 8 * 60 * 60 * 1000,
+                    '1w': 7 * 24 * 60 * 60 * 1000,
+                    '1y': 365 * 24 * 60 * 60 * 1000,
+                };
+                const ms = durations[duration];
+                if (ms) mutedUntil = new Date(now.getTime() + ms);
+            }
+
+            const updateFields: Record<string, unknown> = {
+                'participants.$.muted': !!muted,
+            };
+            if (muted) {
+                updateFields['participants.$.mutedUntil'] = mutedUntil; // null = indefinite
+            } else {
+                updateFields['participants.$.mutedUntil'] = null;
+            }
+
             await Chat.updateOne(
                 { _id: chatId, 'participants.user': userId },
-                { $set: { 'participants.$.muted': !!muted } }
+                { $set: updateFields }
             );
-            res.json({ message: muted ? 'Chat muted' : 'Chat unmuted', muted: !!muted });
+            res.json({
+                message: muted ? 'Chat muted' : 'Chat unmuted',
+                muted: !!muted,
+                mutedUntil,
+                duration: muted ? (duration || 'always') : null,
+            });
         } catch (error) {
             console.error('Mute chat error:', error);
             res.status(500).json({ error: 'Failed to update mute setting' });
+        }
+    },
+
+    // Get all muted chats for current user
+    async getMutedChats(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const chats = await Chat.find({
+                'participants': {
+                    $elemMatch: { user: userId, muted: true }
+                }
+            })
+                .populate('participants.user', 'name avatar status lastSeen email phone')
+                .populate('lastMessage')
+                .sort({ lastMessageAt: -1 });
+
+            const now = new Date();
+            const mutedChats = chats.map(chat => {
+                const chatObj: any = chat.toObject();
+                const myParticipant = chat.participants.find(
+                    p => p.user._id?.toString() === userId || p.user.toString() === userId
+                );
+                return {
+                    ...chatObj,
+                    mutedUntil: myParticipant?.mutedUntil || null,
+                    isMuteExpired: myParticipant?.mutedUntil ? myParticipant.mutedUntil < now : false,
+                };
+            });
+
+            res.json({ chats: mutedChats });
+        } catch (error) {
+            console.error('Get muted chats error:', error);
+            res.status(500).json({ error: 'Failed to get muted chats' });
         }
     },
 

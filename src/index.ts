@@ -72,14 +72,57 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     res.status(500).json({ error: 'Internal server error' });
 });
 
+import { Chat } from './models';
+
 // Initialize Socket.io handlers
 initializeSocket(io);
+
+// =============================================
+// Mute expiry background job
+// Runs every 5 minutes to auto-unmute expired mutes
+// =============================================
+function startMuteExpiryJob() {
+    const INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+    setInterval(async () => {
+        try {
+            const now = new Date();
+            const result = await Chat.updateMany(
+                {
+                    'participants': {
+                        $elemMatch: {
+                            muted: true,
+                            mutedUntil: { $ne: null, $lt: now },
+                        },
+                    },
+                },
+                {
+                    $set: {
+                        'participants.$[elem].muted': false,
+                        'participants.$[elem].mutedUntil': null,
+                    },
+                },
+                {
+                    arrayFilters: [{ 'elem.muted': true, 'elem.mutedUntil': { $ne: null, $lt: now } }],
+                }
+            );
+            if (result.modifiedCount > 0) {
+                console.log(`🔔 Auto-unmuted expired mutes in ${result.modifiedCount} chat(s)`);
+            }
+        } catch (error) {
+            console.error('Mute expiry job error:', error);
+        }
+    }, INTERVAL_MS);
+    console.log('⏰ Mute expiry job started (runs every 5 min)');
+}
 
 // Start server
 const startServer = async () => {
     try {
         // Connect to MongoDB
         await connectDatabase();
+
+        // Start background jobs
+        startMuteExpiryJob();
 
         server.listen(config.port, () => {
             console.log(`🚀 Server running on http://localhost:${config.port}`);

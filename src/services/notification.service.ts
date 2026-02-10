@@ -133,8 +133,45 @@ async function shouldNotify(userId: string, chatId?: string): Promise<boolean> {
     if (!user) return false;
     if (!user.settings?.notifications) return false;
 
-    // TODO: Check per-chat mute settings when implemented
+    // Check per-chat mute settings
+    if (chatId) {
+        const isMuted = await isChatMutedForUser(userId, chatId);
+        if (isMuted) return false;
+    }
+
     return true;
+}
+
+/**
+ * Check if a specific chat is muted for a user.
+ * Handles mute expiry: if mutedUntil is set and has passed, auto-unmutes.
+ */
+export async function isChatMutedForUser(userId: string, chatId: string): Promise<boolean> {
+    const { Chat } = await import('../models');
+    const chat = await Chat.findOne(
+        { _id: chatId, 'participants.user': userId },
+        { 'participants.$': 1 }
+    ).lean();
+
+    if (!chat || !chat.participants || chat.participants.length === 0) return false;
+
+    const participant = chat.participants[0];
+    if (!participant.muted) return false;
+
+    // Check if mute has expired
+    if (participant.mutedUntil) {
+        const now = new Date();
+        if (participant.mutedUntil < now) {
+            // Auto-unmute expired mutes
+            await Chat.updateOne(
+                { _id: chatId, 'participants.user': userId },
+                { $set: { 'participants.$.muted': false, 'participants.$.mutedUntil': null } }
+            );
+            return false;
+        }
+    }
+
+    return true; // muted and not expired (or indefinite)
 }
 
 // =============================================
