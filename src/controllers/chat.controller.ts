@@ -575,6 +575,34 @@ export const chatController = {
         }
     },
 
+    // Set chat wallpaper for current user
+    async setChatWallpaper(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const { wallpaper } = req.body;
+            
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { 
+                res.status(404).json({ error: 'Chat not found' }); 
+                return; 
+            }
+
+            await Chat.updateOne(
+                { _id: chatId, 'participants.user': userId },
+                { $set: { 'participants.$.wallpaper': wallpaper } }
+            );
+            
+            res.json({
+                message: 'Wallpaper updated',
+                wallpaper,
+            });
+        } catch (error) {
+            console.error('Set chat wallpaper error:', error);
+            res.status(500).json({ error: 'Failed to update wallpaper' });
+        }
+    },
+
     // Get all muted chats for current user
     async getMutedChats(req: AuthRequest, res: Response): Promise<void> {
         try {

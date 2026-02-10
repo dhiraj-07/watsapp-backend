@@ -10,6 +10,7 @@ export interface IChatParticipant {
     pinnedAt?: Date;
     isArchived: boolean;
     archivedAt?: Date;
+    wallpaper?: string;
 }
 
 export interface IChat extends Document {
@@ -76,6 +77,7 @@ const chatSchema = new Schema<IChat>(
                 default: false,
             },
             archivedAt: Date,
+            wallpaper: String,
         }],
         lastMessage: {
             type: Schema.Types.ObjectId,
