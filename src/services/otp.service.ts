@@ -22,29 +22,31 @@ export const generateOTP = (): string => {
 };
 
 export const storeOTP = (email: string, otp: string): void => {
+    const key = email.trim().toLowerCase();
     const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
-    otpStore.set(email, { otp, expiresAt, attempts: 0 });
+    otpStore.set(key, { otp, expiresAt, attempts: 0 });
 
     // Auto-cleanup after expiry
     setTimeout(() => {
-        otpStore.delete(email);
+        otpStore.delete(key);
     }, OTP_EXPIRY_MINUTES * 60 * 1000);
 };
 
 export const verifyOTP = (email: string, inputOtp: string): { valid: boolean; message: string } => {
-    const stored = otpStore.get(email);
+    const key = email.trim().toLowerCase();
+    const stored = otpStore.get(key);
 
     if (!stored) {
         return { valid: false, message: 'OTP expired or not found. Please request a new one.' };
     }
 
     if (new Date() > stored.expiresAt) {
-        otpStore.delete(email);
+        otpStore.delete(key);
         return { valid: false, message: 'OTP has expired. Please request a new one.' };
     }
 
     if (stored.attempts >= MAX_ATTEMPTS) {
-        otpStore.delete(email);
+        otpStore.delete(key);
         return { valid: false, message: 'Too many failed attempts. Please request a new OTP.' };
     }
 
@@ -53,7 +55,7 @@ export const verifyOTP = (email: string, inputOtp: string): { valid: boolean; me
         return { valid: false, message: `Invalid OTP. ${MAX_ATTEMPTS - stored.attempts} attempts remaining.` };
     }
 
-    otpStore.delete(email);
+    otpStore.delete(key);
     return { valid: true, message: 'OTP verified successfully' };
 };
 

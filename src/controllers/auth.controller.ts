@@ -8,7 +8,7 @@ export const authController = {
     // Request OTP for login/signup
     async requestOTP(req: AuthRequest, res: Response): Promise<void> {
         try {
-            const { email } = req.body;
+            const email = req.body.email?.trim().toLowerCase();
 
             if (!email) {
                 res.status(400).json({ error: 'Email is required' });
@@ -45,7 +45,8 @@ export const authController = {
     // Verify OTP and login/register
     async verifyOTPAndLogin(req: AuthRequest, res: Response): Promise<void> {
         try {
-            const { email, otp, name } = req.body;
+            const email = req.body.email?.trim().toLowerCase();
+            const { otp, name } = req.body;
 
             if (!email || !otp) {
                 res.status(400).json({ error: 'Email and OTP are required' });
