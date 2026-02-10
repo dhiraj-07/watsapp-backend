@@ -21,6 +21,7 @@ router.post('/:chatId/participants/:userId/remove-admin', chatController.removeA
 router.delete('/:chatId/leave', chatController.leaveGroup);
 router.put('/:chatId', chatController.updateGroup);
 router.post('/:chatId/mute', chatController.muteChat);
+router.post('/:chatId/disappearing', chatController.setDisappearingMessages);
 router.post('/:chatId/clear', chatController.clearChat);
 router.delete('/:chatId', chatController.deleteChat);
 

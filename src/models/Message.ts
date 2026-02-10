@@ -65,6 +65,7 @@ export interface IMessage extends Document {
     isPinned: boolean;
     pinnedAt?: Date;
     pinnedBy?: mongoose.Types.ObjectId;
+    expiresAt?: Date;
     createdAt: Date;
     updatedAt: Date;
 }
@@ -155,11 +156,18 @@ const messageSchema = new Schema<IMessage>(
             type: Schema.Types.ObjectId,
             ref: 'User',
         },
+        expiresAt: {
+            type: Date,
+            default: undefined,
+        },
     },
     {
         timestamps: true,
     }
 );
+
+// TTL index: MongoDB will automatically delete documents when expiresAt is reached
+messageSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, sparse: true });
 
 // Compound index for efficient chat message queries
 messageSchema.index({ chat: 1, createdAt: -1 });

@@ -196,6 +196,20 @@ export const initializeSocket = (io: Server): void => {
                     readBy: [],
                 });
 
+                // Set expiresAt based on chat's disappearingMessages setting
+                if (chat.disappearingMessages && chat.disappearingMessages !== 'off') {
+                    const now = new Date();
+                    const durations: Record<string, number> = {
+                        '24h': 24 * 60 * 60 * 1000,
+                        '7d': 7 * 24 * 60 * 60 * 1000,
+                        '90d': 90 * 24 * 60 * 60 * 1000,
+                    };
+                    const ms = durations[chat.disappearingMessages];
+                    if (ms) {
+                        message.expiresAt = new Date(now.getTime() + ms);
+                    }
+                }
+
 
                 await message.save();
                 await message.populate('sender', 'name avatar');

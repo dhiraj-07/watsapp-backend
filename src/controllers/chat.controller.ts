@@ -489,6 +489,34 @@ export const chatController = {
         }
     },
 
+    // Set disappearing messages for a chat
+    async setDisappearingMessages(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const { duration } = req.body;
+
+            const validDurations = ['off', '24h', '7d', '90d'];
+            if (!validDurations.includes(duration)) {
+                res.status(400).json({ error: 'Invalid duration. Use: off, 24h, 7d, 90d' });
+                return;
+            }
+
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
+
+            await Chat.updateOne(
+                { _id: chatId },
+                { $set: { disappearingMessages: duration } }
+            );
+
+            res.json({ message: `Disappearing messages set to ${duration}`, duration });
+        } catch (error) {
+            console.error('Set disappearing messages error:', error);
+            res.status(500).json({ error: 'Failed to update disappearing messages setting' });
+        }
+    },
+
     // Toggle mute for a chat
     async muteChat(req: AuthRequest, res: Response): Promise<void> {
         try {

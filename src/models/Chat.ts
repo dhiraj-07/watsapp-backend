@@ -20,6 +20,7 @@ export interface IChat extends Document {
     lastMessage?: mongoose.Types.ObjectId;
     lastMessageAt?: Date;
     createdBy: mongoose.Types.ObjectId;
+    disappearingMessages: 'off' | '24h' | '7d' | '90d';
     isArchived: boolean;
     archivedBy: mongoose.Types.ObjectId[];
     createdAt: Date;
@@ -80,6 +81,11 @@ const chatSchema = new Schema<IChat>(
             required: true,
         },
 
+        disappearingMessages: {
+            type: String,
+            enum: ['off', '24h', '7d', '90d'],
+            default: 'off',
+        },
         isArchived: {
             type: Boolean,
             default: false,
