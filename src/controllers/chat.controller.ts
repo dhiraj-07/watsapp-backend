@@ -600,14 +600,151 @@ export const chatController = {
     async archiveAll(req: AuthRequest, res: Response): Promise<void> {
         try {
             const userId = req.userId;
+            const now = new Date();
+            // Update per-participant archive flag for all chats this user is in
             await Chat.updateMany(
                 { 'participants.user': userId },
-                { $addToSet: { archivedBy: userId } }
+                { $addToSet: { archivedBy: userId }, $set: { 'participants.$[elem].isArchived': true, 'participants.$[elem].archivedAt': now } },
+                { arrayFilters: [{ 'elem.user': new mongoose.Types.ObjectId(userId!) }] }
             );
             res.json({ message: 'All chats archived' });
         } catch (error) {
             console.error('Archive all error:', error);
             res.status(500).json({ error: 'Failed to archive chats' });
+        }
+    },
+
+    // Archive a single chat
+    async archiveChat(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
+
+            await Chat.updateOne(
+                { _id: chatId, 'participants.user': userId },
+                {
+                    $addToSet: { archivedBy: userId },
+                    $set: { 'participants.$.isArchived': true, 'participants.$.archivedAt': new Date() }
+                }
+            );
+            res.json({ message: 'Chat archived', chatId });
+        } catch (error) {
+            console.error('Archive chat error:', error);
+            res.status(500).json({ error: 'Failed to archive chat' });
+        }
+    },
+
+    // Unarchive a single chat
+    async unarchiveChat(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatId } = req.params;
+            const chat = await Chat.findOne({ _id: chatId, 'participants.user': userId });
+            if (!chat) { res.status(404).json({ error: 'Chat not found' }); return; }
+
+            await Chat.updateOne(
+                { _id: chatId, 'participants.user': userId },
+                {
+                    $pull: { archivedBy: userId },
+                    $set: { 'participants.$.isArchived': false, 'participants.$.archivedAt': null }
+                }
+            );
+            res.json({ message: 'Chat unarchived', chatId });
+        } catch (error) {
+            console.error('Unarchive chat error:', error);
+            res.status(500).json({ error: 'Failed to unarchive chat' });
+        }
+    },
+
+    // Bulk archive multiple chats
+    async archiveChats(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { chatIds } = req.body;
+            if (!chatIds || !Array.isArray(chatIds) || chatIds.length === 0) {
+                res.status(400).json({ error: 'chatIds array is required' }); return;
+            }
+            const now = new Date();
+            await Chat.updateMany(
+                { _id: { $in: chatIds }, 'participants.user': userId },
+                { $addToSet: { archivedBy: userId }, $set: { 'participants.$[elem].isArchived': true, 'participants.$[elem].archivedAt': now } },
+                { arrayFilters: [{ 'elem.user': new mongoose.Types.ObjectId(userId!) }] }
+            );
+            res.json({ message: `${chatIds.length} chats archived`, chatIds });
+        } catch (error) {
+            console.error('Bulk archive error:', error);
+            res.status(500).json({ error: 'Failed to archive chats' });
+        }
+    },
+
+    // List archived chats (with pagination)
+    async listArchivedChats(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { limit = 50, before } = req.query;
+
+            const requestingUser = await User.findById(userId).select('contacts');
+            const contactIds = (requestingUser?.contacts || []).map(c => c.toString());
+
+            const query: Record<string, unknown> = {
+                'participants.user': userId,
+                archivedBy: userId,
+            };
+            if (before) {
+                query.lastMessageAt = { $lt: new Date(before as string) };
+            }
+
+            const chats = await Chat.find(query)
+                .populate('participants.user', 'name avatar status lastSeen email phone bio settings')
+                .populate('lastMessage')
+                .populate('createdBy', 'name avatar')
+                .sort({ lastMessageAt: -1 })
+                .limit(parseInt(limit as string));
+
+            const chatsWithUnread = await Promise.all(
+                chats.map(async (chat) => {
+                    const unreadCount = await Message.countDocuments({
+                        chat: chat._id,
+                        sender: { $ne: userId },
+                        'readBy.user': { $ne: userId },
+                        isDeleted: false,
+                    });
+                    const chatObj: any = chat.toObject();
+                    chatObj.participants = chatObj.participants.map((p: any) => ({
+                        ...p,
+                        user: applyPrivacyFilter(p.user as Record<string, unknown>, userId!, contactIds),
+                    }));
+                    const myParticipant = chat.participants.find(
+                        p => p.user._id?.toString() === userId || p.user.toString() === userId
+                    );
+                    chatObj.isPinned = myParticipant?.isPinned || false;
+                    chatObj.pinnedAt = myParticipant?.pinnedAt;
+                    chatObj.isArchived = true;
+                    return { ...chatObj, unreadCount };
+                })
+            );
+            res.json({ chats: chatsWithUnread });
+        } catch (error) {
+            console.error('List archived chats error:', error);
+            res.status(500).json({ error: 'Failed to list archived chats' });
+        }
+    },
+
+    // Update keepChatsArchived setting
+    async updateKeepChatsArchived(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { keepChatsArchived } = req.body;
+            if (typeof keepChatsArchived !== 'boolean') {
+                res.status(400).json({ error: 'keepChatsArchived must be a boolean' }); return;
+            }
+            await User.findByIdAndUpdate(userId, { 'settings.keepChatsArchived': keepChatsArchived });
+            res.json({ message: `keepChatsArchived set to ${keepChatsArchived}`, keepChatsArchived });
+        } catch (error) {
+            console.error('Update keepChatsArchived error:', error);
+            res.status(500).json({ error: 'Failed to update setting' });
         }
     },
 

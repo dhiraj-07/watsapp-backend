@@ -25,15 +25,26 @@ router.post('/:chatId/disappearing', chatController.setDisappearingMessages);
 router.post('/:chatId/clear', chatController.clearChat);
 router.delete('/:chatId', chatController.deleteChat);
 
+// Archive single chat
+router.post('/:chatId/archive', chatController.archiveChat);
+router.post('/:chatId/unarchive', chatController.unarchiveChat);
+
 // Common groups
 router.get('/common-groups/:otherUserId', chatController.getCommonGroups);
 
 // User search
 router.get('/users/search', chatController.searchUsers);
 
+// Archived chats list
+router.get('/archived', chatController.listArchivedChats);
+
 // Bulk operations
 router.post('/archive-all', chatController.archiveAll);
+router.post('/archive-bulk', chatController.archiveChats);
 router.post('/clear-all', chatController.clearAll);
 router.delete('/delete-all', chatController.deleteAll);
+
+// User settings
+router.put('/settings/keep-archived', chatController.updateKeepChatsArchived);
 
 export default router;

@@ -257,6 +257,60 @@ export const initializeSocket = (io: Server): void => {
                     lastMessageAt: new Date(),
                 });
 
+                // ── Auto-unarchive logic (WhatsApp "Keep chats archived" behavior) ──
+                // For each participant who has this chat archived:
+                //   - If keepChatsArchived = false (default): unarchive the chat
+                //   - If keepChatsArchived = true: leave it archived
+                // The sender's own archive status is NOT changed (WhatsApp behavior).
+                try {
+                    const archivedParticipants = chat.participants.filter(
+                        p => p.user.toString() !== userId && chat.archivedBy?.includes(p.user)
+                    );
+                    if (archivedParticipants.length > 0) {
+                        const archivedUserIds = archivedParticipants.map(p => p.user.toString());
+                        // Find which users have keepChatsArchived=false (default)
+                        const usersToCheck = await User.find({
+                            _id: { $in: archivedUserIds },
+                        }).select('_id settings').lean();
+
+                        const unarchiveUserIds: string[] = [];
+                        for (const u of usersToCheck) {
+                            const keep = u.settings?.keepChatsArchived ?? false;
+                            if (!keep) {
+                                unarchiveUserIds.push(u._id.toString());
+                            }
+                        }
+
+                        if (unarchiveUserIds.length > 0) {
+                            // Remove from archivedBy and reset participant-level flags
+                            await Chat.updateOne(
+                                { _id: chatId },
+                                {
+                                    $pull: { archivedBy: { $in: unarchiveUserIds.map(id => new mongoose.Types.ObjectId(id)) } },
+                                }
+                            );
+                            // Reset per-participant isArchived flag for these users
+                            for (const uid of unarchiveUserIds) {
+                                await Chat.updateOne(
+                                    { _id: chatId, 'participants.user': uid },
+                                    { $set: { 'participants.$.isArchived': false, 'participants.$.archivedAt': null } }
+                                );
+                            }
+                            // Notify these users that the chat was auto-unarchived
+                            for (const uid of unarchiveUserIds) {
+                                const userSocketIds = onlineUsers.get(uid);
+                                if (userSocketIds) {
+                                    for (const sid of userSocketIds) {
+                                        io.to(sid).emit('chat:unarchived', { chatId });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (archiveError) {
+                    console.error('Auto-unarchive error:', archiveError);
+                }
+
                 // Emit to all participants in chat
                 io.to(`chat:${chatId}`).emit('message:new', {
                     message: message.toObject(),

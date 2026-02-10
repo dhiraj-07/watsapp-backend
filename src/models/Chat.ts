@@ -8,6 +8,8 @@ export interface IChatParticipant {
     mutedUntil?: Date;
     isPinned: boolean;
     pinnedAt?: Date;
+    isArchived: boolean;
+    archivedAt?: Date;
 }
 
 export interface IChat extends Document {
@@ -69,6 +71,11 @@ const chatSchema = new Schema<IChat>(
                 default: false,
             },
             pinnedAt: Date,
+            isArchived: {
+                type: Boolean,
+                default: false,
+            },
+            archivedAt: Date,
         }],
         lastMessage: {
             type: Schema.Types.ObjectId,

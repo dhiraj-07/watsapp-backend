@@ -21,6 +21,7 @@ export interface IUser extends Document {
     readReceipts: boolean;
     notifications: boolean;
     theme: "light" | "dark" | "system";
+    keepChatsArchived: boolean;
   };
   blockedUsers: mongoose.Types.ObjectId[];
   contacts: mongoose.Types.ObjectId[];
@@ -113,6 +114,10 @@ const userSchema = new Schema<IUser>(
         type: String,
         enum: ["light", "dark", "system"],
         default: "system",
+      },
+      keepChatsArchived: {
+        type: Boolean,
+        default: false,
       },
     },
     blockedUsers: [
