@@ -133,11 +133,14 @@ export const authController = {
             }
 
             const { name, bio, avatar } = req.body;
-            const updates: Partial<{ name: string; bio: string; avatar: string }> = {};
+            const updates: Partial<{ name: string; bio: string; avatar: string | null }> = {};
 
             if (name) updates.name = name;
             if (bio !== undefined) updates.bio = bio;
-            if (avatar) updates.avatar = avatar;
+            if (avatar !== undefined) {
+                // Allow setting avatar to null/empty to remove profile picture
+                updates.avatar = avatar || null;
+            }
 
             const user = await User.findByIdAndUpdate(
                 req.userId,
