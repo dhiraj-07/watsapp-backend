@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { Call } from '../models/Call';
 import { User } from '../models';
 import { AuthRequest } from '../middleware/auth';
+import { filterBlockedParticipants } from '../utils/block';
 
 export const callController = {
     // Initiate a call
@@ -15,7 +16,14 @@ export const callController = {
                 return;
             }
 
-            const participants = recipientIds.map((id: string) => ({
+            // Filter out blocked users from call recipients
+            const eligible = await filterBlockedParticipants(userId!, recipientIds);
+            if (eligible.length === 0) {
+                res.status(403).json({ error: 'User is unavailable' });
+                return;
+            }
+
+            const participants = eligible.map((id: string) => ({
                 user: id,
                 status: 'pending',
             }));

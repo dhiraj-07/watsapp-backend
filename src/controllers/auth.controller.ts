@@ -1,7 +1,8 @@
 import { Response } from 'express';
-import { User, Chat, Message } from '../models';
+import { User, Chat, Message, Block, makeBlockId } from '../models';
 import { AuthRequest, generateToken, generateRefreshToken } from '../middleware/auth';
 import { sendOTP, verifyOTP } from '../services/otp.service';
+import { getSocketIO } from '../socket';
 
 export const authController = {
     // Request OTP for login/signup
@@ -310,7 +311,7 @@ export const authController = {
         }
     },
 
-    // Get blocked users list
+    // Get blocked users list (from Block collection)
     async getBlockedUsers(req: AuthRequest, res: Response): Promise<void> {
         try {
             if (!req.user) {
@@ -318,15 +319,29 @@ export const authController = {
                 return;
             }
 
-            const user = await User.findById(req.userId).populate('blockedUsers', 'name avatar email phone status bio lastSeen');
-            res.json({ blockedUsers: user?.blockedUsers || [] });
+            const blocks = await Block.find({ blockerId: req.userId })
+                .sort({ createdAt: -1 })
+                .lean();
+
+            const blockedIds = blocks.map(b => b.blockedId);
+            const blockedUsers = await User.find({ _id: { $in: blockedIds } })
+                .select('name avatar email phone status bio lastSeen')
+                .lean();
+
+            // Preserve order from blocks query
+            const userMap = new Map(blockedUsers.map(u => [u._id.toString(), u]));
+            const ordered = blockedIds
+                .map(id => userMap.get(id.toString()))
+                .filter(Boolean);
+
+            res.json({ blockedUsers: ordered });
         } catch (error) {
             console.error('Get blocked users error:', error);
             res.status(500).json({ error: 'Failed to get blocked users' });
         }
     },
 
-    // Block a user
+    // Block a user (writes to Block collection + legacy blockedUsers array)
     async blockUser(req: AuthRequest, res: Response): Promise<void> {
         try {
             if (!req.user) {
@@ -341,21 +356,43 @@ export const authController = {
                 return;
             }
 
-            const targetUser = await User.findById(userId);
+            const targetUser = await User.findById(userId).select('name avatar email');
             if (!targetUser) {
                 res.status(404).json({ error: 'User not found' });
                 return;
             }
 
-            const currentUser = await User.findById(req.userId);
-            if (currentUser?.blockedUsers.some(id => id.toString() === userId)) {
+            const blockId = makeBlockId(req.userId!, userId);
+            const existing = await Block.findById(blockId).lean();
+            if (existing) {
                 res.status(400).json({ error: 'User is already blocked' });
                 return;
             }
 
+            // Create block document
+            await Block.create({
+                _id: blockId,
+                blockerId: req.userId,
+                blockedId: userId,
+            });
+
+            // Keep legacy array in sync
             await User.findByIdAndUpdate(req.userId, {
                 $addToSet: { blockedUsers: userId },
             });
+
+            // Emit realtime block event to blocker's sockets
+            try {
+                const io = getSocketIO();
+                if (io) {
+                    io.emit('block:update', {
+                        type: 'blocked',
+                        blockerId: req.userId,
+                        blockedId: userId,
+                        user: { _id: targetUser._id, name: targetUser.name, avatar: targetUser.avatar, email: targetUser.email },
+                    });
+                }
+            } catch { /* socket not ready */ }
 
             res.json({ message: `${targetUser.name} has been blocked` });
         } catch (error) {
@@ -364,7 +401,7 @@ export const authController = {
         }
     },
 
-    // Unblock a user
+    // Unblock a user (removes from Block collection + legacy array)
     async unblockUser(req: AuthRequest, res: Response): Promise<void> {
         try {
             if (!req.user) {
@@ -374,15 +411,32 @@ export const authController = {
 
             const { userId } = req.params;
 
-            const targetUser = await User.findById(userId);
+            const targetUser = await User.findById(userId).select('name avatar email');
             if (!targetUser) {
                 res.status(404).json({ error: 'User not found' });
                 return;
             }
 
+            const blockId = makeBlockId(req.userId!, userId);
+            await Block.findByIdAndDelete(blockId);
+
+            // Keep legacy array in sync
             await User.findByIdAndUpdate(req.userId, {
                 $pull: { blockedUsers: userId },
             });
+
+            // Emit realtime unblock event
+            try {
+                const io = getSocketIO();
+                if (io) {
+                    io.emit('block:update', {
+                        type: 'unblocked',
+                        blockerId: req.userId,
+                        blockedId: userId,
+                        user: { _id: targetUser._id, name: targetUser.name, avatar: targetUser.avatar, email: targetUser.email },
+                    });
+                }
+            } catch { /* socket not ready */ }
 
             res.json({ message: `${targetUser.name} has been unblocked` });
         } catch (error) {

@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { Chat, Message, User, IUser } from '../models';
 import { AuthRequest } from '../middleware/auth';
 import mongoose from 'mongoose';
+import { isBlocked } from '../utils/block';
 
 // Helper: filter a participant user object based on their privacy settings
 function applyPrivacyFilter(
@@ -118,6 +119,9 @@ export const chatController = {
                 return;
             }
 
+            // Block check — can still open existing chat (to see history) but not create new
+            const blocked = await isBlocked(userId!, recipientId);
+
             // Find existing chat
             let chat = await Chat.findOne({
                 type: 'private',
@@ -125,6 +129,11 @@ export const chatController = {
             }).populate('participants.user', 'name avatar status lastSeen email phone');
 
             if (!chat) {
+                // Don't allow creating a new chat if blocked
+                if (blocked) {
+                    res.status(403).json({ error: 'Cannot create chat with this user' });
+                    return;
+                }
                 // Create new chat
                 chat = new Chat({
                     type: 'private',

@@ -1,8 +1,9 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
-import { User, Chat, Message, IMessage, Call } from '../models';
+import { User, Chat, Message, IMessage, Call, Block, makeBlockId } from '../models';
 import mongoose from 'mongoose';
+import { isBlocked, filterBlockedParticipants } from '../utils/block';
 import {
     sendNotification,
     sendNotificationToMany,
@@ -29,7 +30,13 @@ const onlineUsers = new Map<string, Set<string>>(); // odId -> Set<socketId>
 // Track active calls: "callerId:recipientId" -> callId
 const activeCallsMap = new Map<string, string>();
 
+// Reference to the Socket.io server instance (exported for use in controllers)
+let ioInstance: Server | null = null;
+
+export const getSocketIO = (): Server | null => ioInstance;
+
 export const initializeSocket = (io: Server): void => {
+    ioInstance = io;
     // Authentication middleware
     io.use(async (socket: AuthenticatedSocket, next) => {
         try {
@@ -75,11 +82,21 @@ export const initializeSocket = (io: Server): void => {
         // Auto-deliver undelivered messages when user comes online
         try {
             const chatIds = userChats.map(c => c._id);
+
+            // Get user's blockers to exclude their messages from auto-delivery
+            const blockerIds = await Block.find({ blockedId: userId }).select('blockerId').lean();
+            const blockerIdSet = new Set(blockerIds.map(b => b.blockerId.toString()));
+            // Also get who the user has blocked
+            const blockedIds = await Block.find({ blockerId: userId }).select('blockedId').lean();
+            const blockedIdSet = new Set(blockedIds.map(b => b.blockedId.toString()));
+            const allBlockedSenders = new Set([...blockerIdSet, ...blockedIdSet]);
+
             const undeliveredMessages = await Message.find({
                 chat: { $in: chatIds },
                 sender: { $ne: userId },
                 'deliveredTo.user': { $ne: userId },
                 isDeleted: false,
+                ...(allBlockedSenders.size > 0 ? { sender: { $ne: userId, $nin: Array.from(allBlockedSenders) } } : {}),
             });
 
             if (undeliveredMessages.length > 0) {
@@ -164,6 +181,20 @@ export const initializeSocket = (io: Server): void => {
                     return;
                 }
 
+                // ── Block check for private chats ──
+                // In private chats, if either user blocked the other, silently drop the message.
+                // For group chats, we allow sending but filter delivery per-user below.
+                if (chat.type === 'private') {
+                    const otherParticipant = chat.participants.find(p => p.user.toString() !== userId);
+                    if (otherParticipant) {
+                        const blocked = await isBlocked(userId, otherParticipant.user.toString());
+                        if (blocked) {
+                            callback?.({ error: 'Message could not be delivered' });
+                            return;
+                        }
+                    }
+                }
+
                 // Auto-join all online participants to the chat room
                 // (handles newly created chats where recipients haven't joined yet)
                 for (const p of chat.participants) {
@@ -236,8 +267,18 @@ export const initializeSocket = (io: Server): void => {
                 callback?.({ success: true, message: message.toObject() });
 
                 // Auto-deliver to online participants
-                const onlineParticipants = chat.participants
+                // In group chats, filter out users who have blocked the sender
+                const allOnlineParticipants = chat.participants
                     .filter(p => p.user.toString() !== userId && onlineUsers.has(p.user.toString()));
+
+                let eligibleOnlineIds = allOnlineParticipants.map(p => p.user.toString());
+                if (chat.type === 'group' && eligibleOnlineIds.length > 0) {
+                    eligibleOnlineIds = await filterBlockedParticipants(userId, eligibleOnlineIds);
+                }
+
+                const onlineParticipants = allOnlineParticipants.filter(
+                    p => eligibleOnlineIds.includes(p.user.toString())
+                );
 
                 if (onlineParticipants.length > 0) {
                     const now = new Date();
@@ -272,7 +313,12 @@ export const initializeSocket = (io: Server): void => {
                     .filter(p => p.user.toString() !== userId && !onlineUsers.has(p.user.toString()))
                     .map(p => p.user.toString());
 
-                if (offlineParticipantIds.length > 0) {
+                // Filter out blocked users from receiving push notifications
+                const eligibleOfflineIds = chat.type === 'group' && offlineParticipantIds.length > 0
+                    ? await filterBlockedParticipants(userId, offlineParticipantIds)
+                    : offlineParticipantIds;
+
+                if (eligibleOfflineIds.length > 0) {
                     const notif = buildMessageNotification(
                         senderName,
                         content || '',
@@ -283,7 +329,7 @@ export const initializeSocket = (io: Server): void => {
                         imageUrl
                     );
                     notif.data.senderId = userId;
-                    sendNotificationToMany(offlineParticipantIds, notif).catch(err =>
+                    sendNotificationToMany(eligibleOfflineIds, notif).catch(err =>
                         console.error('FCM message notification error:', err)
                     );
                 }
@@ -317,6 +363,12 @@ export const initializeSocket = (io: Server): void => {
                         'participants.user': userId,
                     });
                     if (!targetChat) continue;
+
+                    // Block check for private forward targets
+                    if (targetChat.type === 'private') {
+                        const other = targetChat.participants.find(p => p.user.toString() !== userId);
+                        if (other && await isBlocked(userId, other.user.toString())) continue;
+                    }
 
                     // Auto-join all online participants to the target chat room
                     for (const p of targetChat.participants) {
@@ -1082,28 +1134,36 @@ export const initializeSocket = (io: Server): void => {
                 const caller = await User.findById(userId).select('name avatar');
                 const callerName = caller?.name || 'Someone';
 
+                // ── Block check: filter out recipients who have a block relationship ──
+                const eligibleRecipients = await filterBlockedParticipants(userId, data.recipientIds);
+                if (eligibleRecipients.length === 0) {
+                    // All recipients blocked — silently reject (caller sees "unavailable")
+                    callback?.({ error: 'User is unavailable' });
+                    return;
+                }
+
                 // Find or determine chat for this call
                 let chatId = data.chatId;
-                if (!chatId && data.recipientIds.length === 1) {
+                if (!chatId && eligibleRecipients.length === 1) {
                     const chat = await Chat.findOne({
                         type: 'private',
-                        'participants.user': { $all: [userId, data.recipientIds[0]] },
+                        'participants.user': { $all: [userId, eligibleRecipients[0]] },
                     }).select('_id');
                     chatId = chat?._id?.toString();
                 }
 
-                // Create Call document
+                // Create Call document (only with eligible recipients)
                 const call = await Call.create({
                     type: data.type,
                     initiator: userId,
-                    participants: data.recipientIds.map(id => ({ user: id, status: 'pending' })),
+                    participants: eligibleRecipients.map(id => ({ user: id, status: 'pending' })),
                     status: 'ringing',
                     chat: chatId || undefined,
                 });
 
                 const callId = call._id.toString();
 
-                data.recipientIds.forEach(recipientId => {
+                eligibleRecipients.forEach(recipientId => {
                     activeCallsMap.set(`${userId}:${recipientId}`, callId);
 
                     const recipientSockets = onlineUsers.get(recipientId);
@@ -1135,6 +1195,10 @@ export const initializeSocket = (io: Server): void => {
 
         socket.on('call:accept', async (data: { callerId: string; callId?: string }) => {
             try {
+                // Block check — if block exists between caller and acceptor, drop
+                const blocked = await isBlocked(userId, data.callerId);
+                if (blocked) return;
+
                 const callerSockets = onlineUsers.get(data.callerId);
                 if (callerSockets) {
                     callerSockets.forEach(socketId => {
@@ -1268,8 +1332,9 @@ export const initializeSocket = (io: Server): void => {
             }
         });
 
-        // WebRTC signaling
-        socket.on('webrtc:offer', (data: { recipientId: string; offer: object }) => {
+        // WebRTC signaling — block-aware: drop signaling if users are blocked
+        socket.on('webrtc:offer', async (data: { recipientId: string; offer: object }) => {
+            if (await isBlocked(userId, data.recipientId)) return;
             const recipientSockets = onlineUsers.get(data.recipientId);
             if (recipientSockets) {
                 recipientSockets.forEach(socketId => {
@@ -1278,7 +1343,8 @@ export const initializeSocket = (io: Server): void => {
             }
         });
 
-        socket.on('webrtc:answer', (data: { recipientId: string; answer: object }) => {
+        socket.on('webrtc:answer', async (data: { recipientId: string; answer: object }) => {
+            if (await isBlocked(userId, data.recipientId)) return;
             const recipientSockets = onlineUsers.get(data.recipientId);
             if (recipientSockets) {
                 recipientSockets.forEach(socketId => {
@@ -1287,7 +1353,8 @@ export const initializeSocket = (io: Server): void => {
             }
         });
 
-        socket.on('webrtc:ice-candidate', (data: { recipientId: string; candidate: object }) => {
+        socket.on('webrtc:ice-candidate', async (data: { recipientId: string; candidate: object }) => {
+            if (await isBlocked(userId, data.recipientId)) return;
             const recipientSockets = onlineUsers.get(data.recipientId);
             if (recipientSockets) {
                 recipientSockets.forEach(socketId => {
