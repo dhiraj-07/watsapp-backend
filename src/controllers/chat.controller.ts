@@ -210,7 +210,10 @@ export const chatController = {
 
             const messages = await Message.find(query)
                 .populate('sender', 'name avatar')
-                .populate('replyTo')
+                .populate({
+                    path: 'replyTo',
+                    populate: { path: 'sender', select: 'name avatar' }
+                })
                 .sort({ createdAt: -1 })
                 .limit(parseInt(limit as string));
 

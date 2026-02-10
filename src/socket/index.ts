@@ -214,7 +214,10 @@ export const initializeSocket = (io: Server): void => {
                 await message.save();
                 await message.populate('sender', 'name avatar');
                 if (replyTo) {
-                    await message.populate('replyTo');
+                    await message.populate({
+                        path: 'replyTo',
+                        populate: { path: 'sender', select: 'name avatar' }
+                    });
                 }
 
                 // Update chat's last message
