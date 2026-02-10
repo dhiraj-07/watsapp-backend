@@ -25,6 +25,9 @@ router.post('/:chatId/disappearing', chatController.setDisappearingMessages);
 router.post('/:chatId/clear', chatController.clearChat);
 router.delete('/:chatId', chatController.deleteChat);
 
+// Common groups
+router.get('/common-groups/:otherUserId', chatController.getCommonGroups);
+
 // User search
 router.get('/users/search', chatController.searchUsers);
 

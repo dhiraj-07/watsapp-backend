@@ -623,6 +623,34 @@ export const chatController = {
         }
     },
 
+    // Get common groups between current user and another user
+    async getCommonGroups(req: AuthRequest, res: Response): Promise<void> {
+        try {
+            const userId = req.userId;
+            const { otherUserId } = req.params;
+
+            if (!otherUserId || !mongoose.Types.ObjectId.isValid(otherUserId)) {
+                res.status(400).json({ error: 'Invalid user ID' });
+                return;
+            }
+
+            // Find all group chats where both users are participants
+            const commonGroups = await Chat.find({
+                type: 'group',
+                'participants.user': { $all: [userId, otherUserId] },
+            })
+                .populate('participants.user', 'name avatar email status lastSeen bio')
+                .populate('lastMessage')
+                .sort({ lastMessageAt: -1 })
+                .lean();
+
+            res.json({ groups: commonGroups });
+        } catch (error) {
+            console.error('Get common groups error:', error);
+            res.status(500).json({ error: 'Failed to get common groups' });
+        }
+    },
+
     // Delete all chats
     async deleteAll(req: AuthRequest, res: Response): Promise<void> {
         try {
