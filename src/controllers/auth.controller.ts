@@ -46,7 +46,7 @@ export const authController = {
     async verifyOTPAndLogin(req: AuthRequest, res: Response): Promise<void> {
         try {
             const email = req.body.email?.trim().toLowerCase();
-            const { otp, name } = req.body;
+            const { otp, name, language } = req.body;
 
             if (!email || !otp) {
                 res.status(400).json({ error: 'Email and OTP are required' });
@@ -77,6 +77,7 @@ export const authController = {
                         name,
                         isVerified: true,
                         status: 'online',
+                        ...(language && { 'settings.language': language }),
                     });
                     await user.save();
                     isNewUser = true;
