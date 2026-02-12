@@ -19,13 +19,25 @@ const fileFilter = (req: any, file: Express.Multer.File, cb: multer.FileFilterCa
         'audio/mpeg',       // MP3
         'audio/wav',        // WAV
         'application/pdf',  // Documents
-        'text/plain'
+        'text/plain',
+        'text/csv',
+        'application/msword',                                                          // .doc
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',     // .docx
+        'application/vnd.ms-excel',                                                    // .xls
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',           // .xlsx
+        'application/vnd.ms-powerpoint',                                               // .ppt
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',   // .pptx
+        'application/zip',
+        'application/x-zip-compressed',
+        'application/x-rar-compressed',
+        'application/x-7z-compressed',
+        'application/json',
     ];
 
     if (allowedMimeTypes.includes(file.mimetype)) {
         cb(null, true);
     } else {
-        cb(new Error('Invalid file type. Allowed: Images, Videos, PDFs, Text'));
+        cb(new Error('Invalid file type. Allowed: Images, Videos, Audio, Documents (PDF, Office, Archives), Text, CSV, JSON'));
     }
 };
 

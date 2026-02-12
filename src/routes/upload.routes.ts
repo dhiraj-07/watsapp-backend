@@ -1,9 +1,11 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
+import multer from 'multer';
 import { upload, uploadToCloudinary } from '../utils/upload';
+import { authMiddleware } from '../middleware/auth';
 
 const router = Router();
 
-router.post('/', upload.single('file'), async (req: Request, res: Response) => {
+router.post('/', authMiddleware, upload.single('file'), async (req: Request, res: Response) => {
     try {
         if (!req.file) {
             res.status(400).json({ error: 'No file uploaded' });
@@ -28,6 +30,19 @@ router.post('/', upload.single('file'), async (req: Request, res: Response) => {
         console.error('Upload error:', error);
         res.status(500).json({ error: 'Upload failed' });
     }
+});
+
+// Error-handling middleware for multer errors
+router.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+        res.status(413).json({ error: 'File too large. Maximum size is 50MB.' });
+        return;
+    }
+    if (err && err.message === 'Invalid file type. Allowed: Images, Videos, Audio, Documents (PDF, Office, Archives), Text, CSV, JSON') {
+        res.status(400).json({ error: err.message });
+        return;
+    }
+    res.status(500).json({ error: 'Upload failed' });
 });
 
 export default router;
