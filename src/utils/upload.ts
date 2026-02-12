@@ -69,11 +69,21 @@ export function uploadToCloudinary(
                     ? 'image' as const
                     : 'raw' as const;     // PDFs, text, etc.
 
+        // For raw files, include the original filename so Cloudinary preserves the extension in the URL
+        const uploadOptions: Record<string, unknown> = {
+            folder,
+            resource_type: resourceType,
+        };
+        if (resourceType === 'raw' && file.originalname) {
+            // Use original filename (without path) as public_id so the URL ends with the correct extension
+            const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+            uploadOptions.public_id = `${Date.now()}_${safeName}`;
+            uploadOptions.use_filename = true;
+            uploadOptions.unique_filename = false;
+        }
+
         const stream = cloudinary.uploader.upload_stream(
-            {
-                folder,
-                resource_type: resourceType,
-            },
+            uploadOptions,
             (error, result) => {
                 if (error || !result) {
                     reject(error || new Error('Cloudinary upload failed'));
