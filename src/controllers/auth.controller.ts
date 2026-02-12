@@ -166,6 +166,22 @@ export const authController = {
                 { new: true, runValidators: true }
             );
 
+            // Broadcast profile changes to all chats this user participates in
+            if (user) {
+                const io = getSocketIO();
+                if (io) {
+                    const userChats = await Chat.find({ 'participants.user': req.userId }).select('_id').lean();
+                    const profilePayload = {
+                        userId: req.userId,
+                        name: user.name,
+                        avatar: user.avatar || null,
+                    };
+                    for (const chat of userChats) {
+                        io.to(`chat:${chat._id}`).emit('user:profileUpdated', profilePayload);
+                    }
+                }
+            }
+
             res.json({ user, message: 'Profile updated successfully' });
         } catch (error) {
             console.error('Update profile error:', error);
