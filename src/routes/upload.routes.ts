@@ -20,8 +20,8 @@ router.post('/', authMiddleware, upload.single('file'), async (req: Request, res
             file: {
                 url: result.secure_url,
                 publicId: result.public_id,
-                filename: req.file.originalname,
-                mimetype: req.file.mimetype,
+                fileName: req.file.originalname,
+                mimeType: req.file.mimetype,
                 originalname: req.file.originalname,
                 size: req.file.size
             }
