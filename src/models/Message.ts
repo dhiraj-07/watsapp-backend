@@ -10,6 +10,7 @@ export type MessageType =
     | 'sticker'
     | 'gif'
     | 'poll'
+    | 'event'
     | 'contact'
     | 'system'
     | 'call';
@@ -46,6 +47,19 @@ export interface IMessage extends Document {
             votes: mongoose.Types.ObjectId[];
         }>;
         allowMultiple: boolean;
+    };
+    event?: {
+        name: string;
+        starts: Date;
+        ends?: Date;
+        description?: string;
+        location?: string;
+        callLink?: string;
+        allowGuests: boolean;
+        rsvps: Array<{
+            user: mongoose.Types.ObjectId;
+            status: 'going' | 'maybe' | 'not_going';
+        }>;
     };
     replyTo?: mongoose.Types.ObjectId;
     forwardedFrom?: mongoose.Types.ObjectId;
@@ -89,7 +103,7 @@ const messageSchema = new Schema<IMessage>(
         },
         messageType: {
             type: String,
-            enum: ['text', 'image', 'video', 'audio', 'document', 'location', 'sticker', 'gif', 'poll', 'contact', 'system', 'call'],
+            enum: ['text', 'image', 'video', 'audio', 'document', 'location', 'sticker', 'gif', 'poll', 'event', 'contact', 'system', 'call'],
             default: 'text',
         },
         media: {
@@ -112,6 +126,19 @@ const messageSchema = new Schema<IMessage>(
                 votes: [{ type: Schema.Types.ObjectId, ref: 'User' }],
             }],
             allowMultiple: { type: Boolean, default: false },
+        },
+        event: {
+            name: { type: String, maxlength: 100 },
+            starts: Date,
+            ends: Date,
+            description: { type: String, maxlength: 2048 },
+            location: String,
+            callLink: String,
+            allowGuests: { type: Boolean, default: false },
+            rsvps: [{
+                user: { type: Schema.Types.ObjectId, ref: 'User' },
+                status: { type: String, enum: ['going', 'maybe', 'not_going'], default: 'going' },
+            }],
         },
         replyTo: {
             type: Schema.Types.ObjectId,
