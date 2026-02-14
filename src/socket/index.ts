@@ -165,10 +165,11 @@ export const initializeSocket = (io: Server): void => {
             messageType: string;
             media?: object;
             poll?: { question: string; options: string[]; allowMultiple: boolean };
+            event?: { name: string; starts: string; ends?: string; description?: string; location?: string; callLink?: string; allowGuests?: boolean };
             replyTo?: string;
         }, callback) => {
             try {
-                const { chatId, content, messageType, media, poll, replyTo } = data;
+                const { chatId, content, messageType, media, poll, event, replyTo } = data;
 
                 // Verify user is in chat
                 const chat = await Chat.findOne({
@@ -221,6 +222,16 @@ export const initializeSocket = (io: Server): void => {
                         question: poll.question,
                         options: poll.options.map(text => ({ text, votes: [] })),
                         allowMultiple: poll.allowMultiple || false,
+                    } : undefined,
+                    event: event ? {
+                        name: event.name,
+                        starts: new Date(event.starts),
+                        ends: event.ends ? new Date(event.ends) : undefined,
+                        description: event.description || '',
+                        location: event.location || '',
+                        callLink: event.callLink || '',
+                        allowGuests: event.allowGuests || false,
+                        rsvps: [{ user: new mongoose.Types.ObjectId(userId), status: 'going' }],
                     } : undefined,
                     replyTo,
                     deliveredTo: [],
@@ -847,6 +858,54 @@ export const initializeSocket = (io: Server): void => {
             } catch (error) {
                 console.error('Poll vote error:', error);
                 callback?.({ error: 'Failed to vote' });
+            }
+        });
+
+        // ============ EVENT RSVP ============
+
+        socket.on('event:rsvp', async (data: { messageId: string; status: 'going' | 'maybe' | 'not_going' }, callback) => {
+            try {
+                const message = await Message.findById(data.messageId);
+
+                if (!message || message.messageType !== 'event' || !message.event) {
+                    callback?.({ error: 'Event not found' });
+                    return;
+                }
+
+                // Verify user is in the chat
+                const chat = await Chat.findOne({
+                    _id: message.chat,
+                    'participants.user': userId,
+                });
+
+                if (!chat) {
+                    callback?.({ error: 'Not authorized' });
+                    return;
+                }
+
+                const userObjectId = new mongoose.Types.ObjectId(userId);
+
+                // Remove existing RSVP for this user
+                message.event.rsvps = message.event.rsvps.filter(
+                    r => r.user.toString() !== userId
+                );
+
+                // Add new RSVP (unless toggling off the same status)
+                message.event.rsvps.push({ user: userObjectId, status: data.status });
+
+                await message.save();
+
+                // Broadcast event update to all participants
+                io.to(`chat:${message.chat}`).emit('event:updated', {
+                    messageId: data.messageId,
+                    event: message.event,
+                    chatId: message.chat.toString(),
+                });
+
+                callback?.({ success: true, event: message.event });
+            } catch (error) {
+                console.error('Event RSVP error:', error);
+                callback?.({ error: 'Failed to RSVP' });
             }
         });
 
