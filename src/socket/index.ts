@@ -4,6 +4,7 @@ import { config } from '../config';
 import { User, Chat, Message, IMessage, Call, Block, makeBlockId } from '../models';
 import mongoose from 'mongoose';
 import { isBlocked, filterBlockedParticipants } from '../utils/block';
+import cloudinary from '../config/cloudinary';
 import {
     sendNotification,
     sendNotificationToMany,
@@ -698,11 +699,35 @@ export const initializeSocket = (io: Server): void => {
                     return;
                 }
 
-                // Update message as deleted
+                // Delete media from Cloudinary if present
+                if (message.media?.url) {
+                    try {
+                        // Extract public_id from Cloudinary URL
+                        const urlParts = message.media.url.split('/');
+                        const uploadIdx = urlParts.indexOf('upload');
+                        if (uploadIdx !== -1) {
+                            // public_id is everything after /upload/v{version}/ without the extension
+                            const afterUpload = urlParts.slice(uploadIdx + 2).join('/');
+                            const publicId = afterUpload.replace(/\.[^.]+$/, '');
+                            const resourceType = message.messageType === 'video' ? 'video'
+                                : (message.messageType === 'audio' ? 'video' : 
+                                   (message.messageType === 'document' ? 'raw' : 'image'));
+                            await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+                        }
+                    } catch (cloudErr) {
+                        console.error('Failed to delete media from Cloudinary:', cloudErr);
+                        // Continue with message deletion even if Cloudinary cleanup fails
+                    }
+                }
+
+                // Update message as deleted — clear all content-related fields
                 await Message.findByIdAndUpdate(data.messageId, {
                     isDeleted: true,
                     content: '',
+                    messageType: 'text',
                     media: undefined,
+                    location: undefined,
+                    poll: undefined,
                 });
 
                 // Emit to all participants in the chat
@@ -832,6 +857,9 @@ export const initializeSocket = (io: Server): void => {
                         );
                         await message.save();
 
+                        // Populate voter info before emitting
+                        await message.populate('poll.options.votes', 'name avatar');
+
                         io.to(`chat:${message.chat}`).emit('poll:updated', {
                             messageId: data.messageId,
                             poll: message.poll,
@@ -846,6 +874,9 @@ export const initializeSocket = (io: Server): void => {
                 // Add vote to selected option
                 message.poll.options[optionIndex].votes.push(userObjectId);
                 await message.save();
+
+                // Populate voter info before emitting
+                await message.populate('poll.options.votes', 'name avatar');
 
                 // Broadcast poll update to all participants
                 io.to(`chat:${message.chat}`).emit('poll:updated', {
