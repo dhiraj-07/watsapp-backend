@@ -821,6 +821,9 @@ export const initializeSocket = (io: Server): void => {
                         );
                         await message.save();
 
+                        // Populate voter info before emitting
+                        await message.populate('poll.options.votes', 'name avatar');
+
                         io.to(`chat:${message.chat}`).emit('poll:updated', {
                             messageId: data.messageId,
                             poll: message.poll,
@@ -835,6 +838,9 @@ export const initializeSocket = (io: Server): void => {
                 // Add vote to selected option
                 message.poll.options[optionIndex].votes.push(userObjectId);
                 await message.save();
+
+                // Populate voter info before emitting
+                await message.populate('poll.options.votes', 'name avatar');
 
                 // Broadcast poll update to all participants
                 io.to(`chat:${message.chat}`).emit('poll:updated', {

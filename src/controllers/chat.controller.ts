@@ -223,6 +223,7 @@ export const chatController = {
                     path: 'replyTo',
                     populate: { path: 'sender', select: 'name avatar' }
                 })
+                .populate('poll.options.votes', 'name avatar')
                 .sort({ createdAt: -1 })
                 .limit(parseInt(limit as string));
 
