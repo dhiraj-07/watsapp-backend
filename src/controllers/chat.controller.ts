@@ -74,15 +74,17 @@ export const chatController = {
                     });
 
                     const chatObj: any = chat.toObject();
-                    // Apply privacy filters to participants
-                    chatObj.participants = chatObj.participants.map((p: any) => ({
-                        ...p,
-                        user: applyPrivacyFilter(p.user as Record<string, unknown>, userId!, contactIds),
-                    }));
+                    // Filter out participants whose user was deleted from the database
+                    chatObj.participants = chatObj.participants
+                        .filter((p: any) => p.user != null)
+                        .map((p: any) => ({
+                            ...p,
+                            user: applyPrivacyFilter(p.user as Record<string, unknown>, userId!, contactIds),
+                        }));
 
                     // Get current user's pinned status from their participant record
                     const myParticipant = chat.participants.find(
-                        p => p.user._id?.toString() === userId || p.user.toString() === userId
+                        p => p.user && (p.user._id?.toString() === userId || p.user.toString() === userId)
                     );
                     chatObj.isPinned = myParticipant?.isPinned || false;
                     chatObj.pinnedAt = myParticipant?.pinnedAt;
