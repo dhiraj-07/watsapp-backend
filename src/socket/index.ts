@@ -374,7 +374,7 @@ export const initializeSocket = (io: Server): void => {
                 }
 
                 // Send push notifications to offline users
-                const senderObj = message.toObject().sender;
+                const senderObj = message.toObject().sender as any;
                 const senderName = senderObj?.name || 'Someone';
                 const chatName = chat.type === 'group' ? chat.name : undefined;
                 const isGroup = chat.type === 'group';
@@ -930,6 +930,7 @@ export const initializeSocket = (io: Server): void => {
                 // Add new RSVP (unless toggling off the same status)
                 message.event.rsvps.push({ user: userObjectId, status: data.status });
 
+                message.markModified('event');
                 await message.save();
 
                 // Broadcast event update to all participants
@@ -1006,6 +1007,7 @@ export const initializeSocket = (io: Server): void => {
 
                 message.isEdited = true;
                 message.editedAt = new Date();
+                message.markModified('event');
                 await message.save();
 
                 io.to(`chat:${message.chat}`).emit('event:updated', {
@@ -1058,6 +1060,7 @@ export const initializeSocket = (io: Server): void => {
                 }
 
                 message.event.status = 'cancelled';
+                message.markModified('event');
                 await message.save();
 
                 io.to(`chat:${message.chat}`).emit('event:updated', {
