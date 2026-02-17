@@ -901,11 +901,13 @@ export const initializeSocket = (io: Server): void => {
         // ============ EVENT RSVP ============
 
         socket.on('event:rsvp', async (data: { messageId: string; status: 'going' | 'maybe' | 'not_going' }, callback) => {
+            console.log('[Event RSVP] Received RSVP request:', { userId, messageId: data.messageId, status: data.status });
             try {
                 const message = await Message.findById(data.messageId);
 
                 if (!message || message.messageType !== 'event' || !message.event) {
-                    callback?.({ error: 'Event not found' });
+                    console.warn('[Event RSVP] Event not found:', { messageId: data.messageId });
+                    callback?.({ success: false, error: 'Event not found' });
                     return;
                 }
 
@@ -916,7 +918,8 @@ export const initializeSocket = (io: Server): void => {
                 });
 
                 if (!chat) {
-                    callback?.({ error: 'Not authorized' });
+                    console.warn('[Event RSVP] User not in chat:', { userId, chatId: message.chat });
+                    callback?.({ success: false, error: 'Not authorized' });
                     return;
                 }
 
@@ -932,6 +935,11 @@ export const initializeSocket = (io: Server): void => {
 
                 message.markModified('event');
                 await message.save();
+
+                console.log('[Event RSVP] RSVP saved successfully:', { userId, messageId: data.messageId, status: data.status });
+
+                // Populate RSVP user details before broadcasting
+                await message.populate('event.rsvps.user', 'name avatar');
 
                 // Broadcast event update to all participants
                 io.to(`chat:${message.chat}`).emit('event:updated', {
@@ -959,8 +967,8 @@ export const initializeSocket = (io: Server): void => {
                     sendNotification(hostId, notif).catch(() => {});
                 }
             } catch (error) {
-                console.error('Event RSVP error:', error);
-                callback?.({ error: 'Failed to RSVP' });
+                console.error('[Event RSVP] Error occurred:', error);
+                callback?.({ success: false, error: 'Failed to RSVP' });
             }
         });
 
@@ -976,21 +984,25 @@ export const initializeSocket = (io: Server): void => {
             mapLink?: string;
             callLink?: string;
             reminderEnabled?: boolean;
-        }, callback) => {
+        }, callback?: (response: { success?: boolean; event?: any; error?: string }) => void) => {
+            console.log('[Event Edit] Received edit request:', { userId, messageId: data.messageId, updates: Object.keys(data).filter(k => k !== 'messageId') });
             try {
                 const message = await Message.findById(data.messageId);
                 if (!message || message.messageType !== 'event' || !message.event) {
+                    console.warn('[Event Edit] Event not found');
                     callback?.({ error: 'Event not found' });
                     return;
                 }
 
                 // Only host (sender) can edit
                 if (message.sender.toString() !== userId) {
+                    console.warn('[Event Edit] Permission denied - not the host');
                     callback?.({ error: 'Only the event host can edit' });
                     return;
                 }
 
                 if (message.event.status === 'cancelled') {
+                    console.warn('[Event Edit] Cannot edit cancelled event');
                     callback?.({ error: 'Cannot edit a cancelled event' });
                     return;
                 }
@@ -1009,14 +1021,20 @@ export const initializeSocket = (io: Server): void => {
                 message.editedAt = new Date();
                 message.markModified('event');
                 await message.save();
+                console.log('[Event Edit] Event updated in database');
+
+                // Populate RSVP user details before broadcasting
+                await message.populate('event.rsvps.user', 'name avatar');
 
                 io.to(`chat:${message.chat}`).emit('event:updated', {
                     messageId: data.messageId,
                     event: message.event,
                     chatId: message.chat.toString(),
                 });
+                console.log('[Event Edit] Broadcasted event:updated');
 
                 callback?.({ success: true, event: message.event });
+                console.log('[Event Edit] Success callback sent');
 
                 // Notify participants about reschedule
                 const chat = await Chat.findById(message.chat);
@@ -1039,22 +1057,33 @@ export const initializeSocket = (io: Server): void => {
                     }
                 }
             } catch (error) {
-                console.error('Event edit error:', error);
+                console.error('[Event Edit] Error occurred:', error);
                 callback?.({ error: 'Failed to edit event' });
             }
         });
 
         // ============ EVENT CANCEL ============
 
-        socket.on('event:cancel', async (data: { messageId: string }, callback) => {
+        socket.on('event:cancel', async (data: { messageId: string }, callback?: (response: { success?: boolean; event?: any; error?: string }) => void) => {
+            console.log('[Event Cancel] Received cancel request:', { userId, messageId: data.messageId, hasCallback: !!callback });
             try {
                 const message = await Message.findById(data.messageId);
+                console.log('[Event Cancel] Message found:', { 
+                    found: !!message, 
+                    messageType: message?.messageType, 
+                    hasEvent: !!message?.event,
+                    sender: message?.sender?.toString(),
+                    currentUser: userId 
+                });
+                
                 if (!message || message.messageType !== 'event' || !message.event) {
+                    console.warn('[Event Cancel] Event not found or invalid');
                     callback?.({ error: 'Event not found' });
                     return;
                 }
 
                 if (message.sender.toString() !== userId) {
+                    console.warn('[Event Cancel] Permission denied - not the host');
                     callback?.({ error: 'Only the event host can cancel' });
                     return;
                 }
@@ -1062,14 +1091,21 @@ export const initializeSocket = (io: Server): void => {
                 message.event.status = 'cancelled';
                 message.markModified('event');
                 await message.save();
+                console.log('[Event Cancel] Event cancelled in database');
+
+                // Populate RSVP user details before broadcasting
+                await message.populate('event.rsvps.user', 'name avatar');
+                console.log('[Event Cancel] RSVPs populated');
 
                 io.to(`chat:${message.chat}`).emit('event:updated', {
                     messageId: data.messageId,
                     event: message.event,
                     chatId: message.chat.toString(),
                 });
+                console.log('[Event Cancel] Broadcasted event:updated to chat:', message.chat.toString());
 
                 callback?.({ success: true, event: message.event });
+                console.log('[Event Cancel] Success callback sent');
 
                 // Notify participants
                 const chat = await Chat.findById(message.chat);
@@ -1093,7 +1129,7 @@ export const initializeSocket = (io: Server): void => {
                     }
                 }
             } catch (error) {
-                console.error('Event cancel error:', error);
+                console.error('[Event Cancel] Error occurred:', error);
                 callback?.({ error: 'Failed to cancel event' });
             }
         });
