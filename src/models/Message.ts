@@ -54,8 +54,11 @@ export interface IMessage extends Document {
         ends?: Date;
         description?: string;
         location?: string;
+        mapLink?: string;
         callLink?: string;
         allowGuests: boolean;
+        reminderEnabled: boolean;
+        status: 'active' | 'cancelled' | 'completed';
         rsvps: Array<{
             user: mongoose.Types.ObjectId;
             status: 'going' | 'maybe' | 'not_going';
@@ -120,25 +123,34 @@ const messageSchema = new Schema<IMessage>(
             address: String,
         },
         poll: {
-            question: String,
-            options: [{
-                text: String,
-                votes: [{ type: Schema.Types.ObjectId, ref: 'User' }],
-            }],
-            allowMultiple: { type: Boolean, default: false },
+            type: new Schema({
+                question: String,
+                options: [{
+                    text: String,
+                    votes: [{ type: Schema.Types.ObjectId, ref: 'User' }],
+                }],
+                allowMultiple: { type: Boolean, default: false },
+            }, { _id: false }),
+            default: undefined,
         },
         event: {
-            name: { type: String, maxlength: 100 },
-            starts: Date,
-            ends: Date,
-            description: { type: String, maxlength: 2048 },
-            location: String,
-            callLink: String,
-            allowGuests: { type: Boolean, default: false },
-            rsvps: [{
-                user: { type: Schema.Types.ObjectId, ref: 'User' },
-                status: { type: String, enum: ['going', 'maybe', 'not_going'], default: 'going' },
-            }],
+            type: new Schema({
+                name: { type: String, maxlength: 100 },
+                starts: Date,
+                ends: Date,
+                description: { type: String, maxlength: 2048 },
+                location: String,
+                mapLink: String,
+                callLink: String,
+                allowGuests: { type: Boolean, default: false },
+                reminderEnabled: { type: Boolean, default: true },
+                status: { type: String, enum: ['active', 'cancelled', 'completed'], default: 'active' },
+                rsvps: [{
+                    user: { type: Schema.Types.ObjectId, ref: 'User' },
+                    status: { type: String, enum: ['going', 'maybe', 'not_going'], default: 'going' },
+                }],
+            }, { _id: false }),
+            default: undefined,
         },
         replyTo: {
             type: Schema.Types.ObjectId,

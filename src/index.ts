@@ -12,6 +12,7 @@ import chatRoutes from './routes/chat.routes';
 import statusRoutes from './routes/status.routes';
 import callRoutes from './routes/call.routes';
 import uploadRoutes from './routes/upload.routes';
+import eventRoutes from './routes/event.routes';
 import path from 'path';
 
 // Initialize Express app
@@ -49,6 +50,7 @@ app.use('/api/chats', chatRoutes);
 app.use('/api/status', statusRoutes);
 app.use('/api/calls', callRoutes);
 app.use('/api/upload', uploadRoutes);
+app.use('/api/events', eventRoutes);
 
 // API info
 app.get('/api', (_req: Request, res: Response) => {
@@ -73,6 +75,7 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 import { Chat } from './models';
+import { startEventReminderJob } from './services/eventReminder.service';
 
 // Initialize Socket.io handlers
 initializeSocket(io);
@@ -123,6 +126,7 @@ const startServer = async () => {
 
         // Start background jobs
         startMuteExpiryJob();
+        startEventReminderJob();
 
         server.listen(config.port, () => {
             console.log(`🚀 Server running on http://localhost:${config.port}`);

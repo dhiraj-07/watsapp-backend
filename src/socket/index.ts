@@ -166,7 +166,7 @@ export const initializeSocket = (io: Server): void => {
             messageType: string;
             media?: object;
             poll?: { question: string; options: string[]; allowMultiple: boolean };
-            event?: { name: string; starts: string; ends?: string; description?: string; location?: string; callLink?: string; allowGuests?: boolean };
+            event?: { name: string; starts: string; ends?: string; description?: string; location?: string; mapLink?: string; callLink?: string; allowGuests?: boolean; reminderEnabled?: boolean };
             replyTo?: string;
         }, callback) => {
             try {
@@ -230,8 +230,11 @@ export const initializeSocket = (io: Server): void => {
                         ends: event.ends ? new Date(event.ends) : undefined,
                         description: event.description || '',
                         location: event.location || '',
+                        mapLink: event.mapLink || '',
                         callLink: event.callLink || '',
                         allowGuests: event.allowGuests || false,
+                        reminderEnabled: event.reminderEnabled !== false,
+                        status: 'active' as const,
                         rsvps: [{ user: new mongoose.Types.ObjectId(userId), status: 'going' }],
                     } : undefined,
                     replyTo,
@@ -261,6 +264,9 @@ export const initializeSocket = (io: Server): void => {
                         path: 'replyTo',
                         populate: { path: 'sender', select: 'name avatar' }
                     });
+                }
+                if (message.messageType === 'event') {
+                    await message.populate('event.rsvps.user', 'name avatar');
                 }
 
                 // Update chat's last message
@@ -934,9 +940,158 @@ export const initializeSocket = (io: Server): void => {
                 });
 
                 callback?.({ success: true, event: message.event });
+
+                // Notify host about RSVP
+                const hostId = message.sender.toString();
+                if (hostId !== userId) {
+                    const rsvpUser = await User.findById(userId).select('name').lean();
+                    const rsvpName = rsvpUser?.name || 'Someone';
+                    const statusLabel = data.status === 'going' ? 'Going' : data.status === 'maybe' ? 'Maybe' : 'Not Going';
+                    const notif: import('../services/notification.service').NotificationPayload = {
+                        type: 'new_message',
+                        title: `Event RSVP: ${message.event.name}`,
+                        body: `${rsvpName} responded "${statusLabel}"`,
+                        data: { chatId: message.chat.toString(), url: `/?chat=${message.chat.toString()}` },
+                        channelId: 'events',
+                        tag: `event_rsvp_${data.messageId}`,
+                    };
+                    sendNotification(hostId, notif).catch(() => {});
+                }
             } catch (error) {
                 console.error('Event RSVP error:', error);
                 callback?.({ error: 'Failed to RSVP' });
+            }
+        });
+
+        // ============ EVENT EDIT ============
+
+        socket.on('event:edit', async (data: {
+            messageId: string;
+            name?: string;
+            starts?: string;
+            ends?: string | null;
+            description?: string;
+            location?: string;
+            mapLink?: string;
+            callLink?: string;
+            reminderEnabled?: boolean;
+        }, callback) => {
+            try {
+                const message = await Message.findById(data.messageId);
+                if (!message || message.messageType !== 'event' || !message.event) {
+                    callback?.({ error: 'Event not found' });
+                    return;
+                }
+
+                // Only host (sender) can edit
+                if (message.sender.toString() !== userId) {
+                    callback?.({ error: 'Only the event host can edit' });
+                    return;
+                }
+
+                if (message.event.status === 'cancelled') {
+                    callback?.({ error: 'Cannot edit a cancelled event' });
+                    return;
+                }
+
+                // Apply updates
+                if (data.name !== undefined) message.event.name = data.name;
+                if (data.starts !== undefined) message.event.starts = new Date(data.starts);
+                if (data.ends !== undefined) message.event.ends = data.ends ? new Date(data.ends) : undefined;
+                if (data.description !== undefined) message.event.description = data.description;
+                if (data.location !== undefined) message.event.location = data.location;
+                if (data.mapLink !== undefined) message.event.mapLink = data.mapLink;
+                if (data.callLink !== undefined) message.event.callLink = data.callLink;
+                if (data.reminderEnabled !== undefined) message.event.reminderEnabled = data.reminderEnabled;
+
+                message.isEdited = true;
+                message.editedAt = new Date();
+                await message.save();
+
+                io.to(`chat:${message.chat}`).emit('event:updated', {
+                    messageId: data.messageId,
+                    event: message.event,
+                    chatId: message.chat.toString(),
+                });
+
+                callback?.({ success: true, event: message.event });
+
+                // Notify participants about reschedule
+                const chat = await Chat.findById(message.chat);
+                if (chat) {
+                    const participantIds = chat.participants
+                        .map(p => p.user.toString())
+                        .filter(id => id !== userId);
+                    if (participantIds.length > 0) {
+                        const host = await User.findById(userId).select('name').lean();
+                        const hostName = host?.name || 'Host';
+                        const notif: import('../services/notification.service').NotificationPayload = {
+                            type: 'new_message',
+                            title: `Event Updated: ${message.event.name}`,
+                            body: `${hostName} updated the event details`,
+                            data: { chatId: message.chat.toString(), url: `/?chat=${message.chat.toString()}` },
+                            channelId: 'events',
+                            tag: `event_update_${data.messageId}`,
+                        };
+                        sendNotificationToMany(participantIds, notif).catch(() => {});
+                    }
+                }
+            } catch (error) {
+                console.error('Event edit error:', error);
+                callback?.({ error: 'Failed to edit event' });
+            }
+        });
+
+        // ============ EVENT CANCEL ============
+
+        socket.on('event:cancel', async (data: { messageId: string }, callback) => {
+            try {
+                const message = await Message.findById(data.messageId);
+                if (!message || message.messageType !== 'event' || !message.event) {
+                    callback?.({ error: 'Event not found' });
+                    return;
+                }
+
+                if (message.sender.toString() !== userId) {
+                    callback?.({ error: 'Only the event host can cancel' });
+                    return;
+                }
+
+                message.event.status = 'cancelled';
+                await message.save();
+
+                io.to(`chat:${message.chat}`).emit('event:updated', {
+                    messageId: data.messageId,
+                    event: message.event,
+                    chatId: message.chat.toString(),
+                });
+
+                callback?.({ success: true, event: message.event });
+
+                // Notify participants
+                const chat = await Chat.findById(message.chat);
+                if (chat) {
+                    const participantIds = chat.participants
+                        .map(p => p.user.toString())
+                        .filter(id => id !== userId);
+                    if (participantIds.length > 0) {
+                        const host = await User.findById(userId).select('name').lean();
+                        const hostName = host?.name || 'Host';
+                        const notif: import('../services/notification.service').NotificationPayload = {
+                            type: 'new_message',
+                            title: `Event Cancelled`,
+                            body: `${hostName} cancelled "${message.event.name}"`,
+                            data: { chatId: message.chat.toString(), url: `/?chat=${message.chat.toString()}` },
+                            channelId: 'events',
+                            tag: `event_cancel_${data.messageId}`,
+                            priority: 'high',
+                        };
+                        sendNotificationToMany(participantIds, notif).catch(() => {});
+                    }
+                }
+            } catch (error) {
+                console.error('Event cancel error:', error);
+                callback?.({ error: 'Failed to cancel event' });
             }
         });
 

@@ -49,7 +49,12 @@ export type NotificationType =
     | 'group_member_removed'
     | 'group_admin_change'
     | 'poll_created'
-    | 'poll_vote';
+    | 'poll_vote'
+    | 'event_created'
+    | 'event_rsvp'
+    | 'event_updated'
+    | 'event_cancelled'
+    | 'event_reminder';
 
 export interface NotificationPayload {
     type: NotificationType;

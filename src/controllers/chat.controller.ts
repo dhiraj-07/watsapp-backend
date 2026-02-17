@@ -224,6 +224,7 @@ export const chatController = {
                     populate: { path: 'sender', select: 'name avatar' }
                 })
                 .populate('poll.options.votes', 'name avatar')
+                .populate('event.rsvps.user', 'name avatar')
                 .sort({ createdAt: -1 })
                 .limit(parseInt(limit as string));
 
